@@ -1791,7 +1791,7 @@ function albumAvatar(album) {
 // ===================== NAVIGATION =====================
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
-  'missing', 'missing-tracks', 'rym', 'covers', 'completeness', 'audit', 'ratesession', 'artistview', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'journal', 'insights', 'import',
+  'missing', 'missing-tracks', 'rym', 'ratesession', 'artistview', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'insights', 'import',
   'ok-albums', 'forsale', 'stock'];
 function nav(id) {
   SECTIONS.forEach(s => {
@@ -1806,10 +1806,8 @@ function nav(id) {
     'all-tracks': 'Tous les morceaux', 'album-tracks': 'Morceaux des albums',
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
-    rym: 'RateYourMusic', covers: 'Pochettes',
-    completeness: 'Complétude',
-    audit: 'Audit collection',
-    ratesession: 'Session notation', artistview: 'Vue Artiste', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', journal: 'Journal des changements', insights: 'Insights', import: 'Import / Export'
+    rym: 'RateYourMusic',
+    ratesession: 'Session notation', artistview: 'Vue Artiste', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1818,18 +1816,14 @@ function nav(id) {
     tracks: 'Fichiers isolés (top titres)', 'track-wishlist': 'Morceaux à acquérir',
     missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
     rym: 'Croisement collection & ratings',
-    covers: 'Galerie & résolution des pochettes',
-    completeness: 'Pochette / genre / note / tracklist — repérer les fiches négligées',
-    audit: 'Vues globales : scores MB bas, écarts note/RYM, divergences Discogs/MusicBrainz, discographie manquante',
     ratesession: 'Un album ou morceau non noté à la fois, ordre aléatoire (albums possédés jamais écoutés inclus)',
     artistview: 'Discographie MusicBrainz complète — possédés et manquants, notes et écoutes rapatriées',
     artistlinks: 'Crédits MusicBrainz croisés avec ta collection',
     marketvalue: 'Estimation via le marketplace Discogs — indicatif, pas une cote officielle',
     loans: 'CD physiques actuellement prêtés',
     notestoreport: 'À reporter manuellement dans MusicBee / Discogs / RYM',
-    journal: 'Ce qui a changé depuis un snapshot — pour vérifier l\u2019effet d\u2019un import',
     insights: 'Genres, décennies, artistes, écoutes',
-    import: 'Sources externes & sauvegarde'
+    import: 'Sources externes, Pochettes, Complétude, Audit, Journal & sauvegarde'
   };
   document.getElementById('topbar-title').textContent = titles[id] || id;
   document.getElementById('topbar-sub').textContent = subs[id] || '';
@@ -1844,17 +1838,13 @@ function nav(id) {
   if (id === 'all-tracks')    renderAllTracks();
   if (id === 'album-tracks')  renderAlbumTracks();
   if (id === 'track-wishlist') renderTrackWishlist();
-  if (id === 'covers') renderCoversGallery();
-  if (id === 'completeness') renderCompleteness();
-  if (id === 'audit') renderAudit();
   if (id === 'ratesession') initRatingSession();
-  if (id === 'import') { renderAssocReview(); renderMissingIds(); }
+  if (id === 'import') { renderAssocReview(); renderMissingIds(); updateNavBadges(); }
   if (id === 'artistview') renderArtistView();
   if (id === 'artistlinks') renderArtistLinks();
   if (id === 'marketvalue') renderMarketValue();
   if (id === 'loans') renderLoans();
   if (id === 'notestoreport') renderNotesToReport();
-  if (id === 'journal') renderJournal();
   if (id === 'insights') renderInsights();
 }
 
@@ -2918,7 +2908,7 @@ function renderTracks() {
     return `<tr>
       <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="${tSid}" ${selectedTrackIds.has(t.id) ? 'checked' : ''} onchange="toggleTrackSelected('${tSid}', this.checked)"></td>
       <td style="font-weight:500">${esc(t.title)}${lovedBadge}</td>
-      <td style="color:var(--text2);font-size:13px">${esc(t.artist)}</td>
+      <td style="color:var(--text2);font-size:13px">${artistLink(t.artist)}</td>
       <td style="color:var(--text3);font-size:12px">${esc(t.album||'–')}</td>
       <td><span class="badge ${fmtBadge[t.format]||'badge-digital'}">${(t.format||'?').toUpperCase()}</span></td>
       <td>${bitrateHtml}</td>
@@ -3241,7 +3231,7 @@ function renderMissing() {
         <div class="missing-info" style="min-width:0;flex:1">
           <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)} ${stBadge}</div>
           <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
-            <span>${esc(m.artist)}</span>
+            <span>${artistLink(m.artist)}</span>
             <span class="mono" style="color:var(--accent)">${m.plays} écoute${m.plays>1?'s':''}</span>
             ${rymBadge}${genreBadge}
           </div>
@@ -3543,7 +3533,7 @@ function renderMissingTracks() {
     return `<tr style="opacity:${isIgnored ? 0.45 : 1}">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-key="${sid(key)}" ${selectedMissingTrackKeys.has(key) ? 'checked' : ''} onchange="toggleMissingTrackSelected('${sid(key)}', this.checked)"></td>
     <td style="font-weight:500">${esc(d.track)}${stBadge}</td>
-    <td style="color:var(--text2);font-size:13px">${esc(d.artist)}</td>
+    <td style="color:var(--text2);font-size:13px">${artistLink(d.artist)}</td>
     <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}${albumBadge}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
     <td style="display:flex;gap:3px;flex-wrap:wrap">
@@ -4336,6 +4326,18 @@ function selectCoverCandidate(url, label) {
   document.querySelectorAll('.cover-choice-item').forEach(el => {
     el.classList.toggle('selected', el.querySelector('img')?.src === url);
   });
+}
+
+// Recherche d'images DuckDuckGo pré-remplie (demandé par Antoine) — ouvre un nouvel onglet,
+// à charge de copier l'URL de l'image trouvée dans le champ manuel ci-dessous puis
+// "Prévisualiser". DuckDuckGo n'a pas d'API d'images publique/gratuite, donc pas d'intégration
+// directe possible dans la grille de propositions (Discogs/Last.fm) — ce bouton reste une
+// simple ouverture de recherche, pas une automatisation.
+function searchCoverOnDuckDuckGo() {
+  const a = albums.find(x => x.id === _coverChoiceAlbumId || x.id === String(_coverChoiceAlbumId));
+  if (!a) return;
+  const q = `${a.artist} ${a.album} album cover`;
+  window.open(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&iax=images&ia=images`, '_blank');
 }
 
 function previewManualCoverUrl() {
@@ -8219,7 +8221,7 @@ function renderAllTracks() {
     const folBadge = fol ? `<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${fol}</span>` : '–';
     return `<tr>
       <td style="font-weight:500">${esc(t.title)}${isLoved ? ' <span style="font-size:11px" title="Lové sur last.fm">❤️</span>' : ''}</td>
-      <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
+      <td style="font-size:12px;color:var(--text2)">${artistLink(t.artist)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(t.album||'–')}</td>
       <td>${srcBadge}</td>
       <td>${folBadge}</td>
@@ -8303,7 +8305,7 @@ function renderAlbumTracks() {
       : '<span style="color:var(--text3);font-size:11px">–</span>';
     return `<tr>
       <td style="font-weight:500">${esc(t.title)}${isLoved ? ' <span style="font-size:11px" title="Lové sur last.fm">❤️</span>' : ''}</td>
-      <td style="font-size:12px;color:var(--text2)">${esc(t.artist)}</td>
+      <td style="font-size:12px;color:var(--text2)">${artistLink(t.artist)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(t.album)}</td>
       <td>${noteHtml}</td>
       <td class="mono" style="color:var(--accent);font-size:12px">${plays||'–'}</td>
@@ -8358,7 +8360,7 @@ function renderTrackWishlist() {
   if (!list.length) { tbody.innerHTML='<tr><td colspan="5"><div class="empty"><div class="empty-icon">🎯</div>Wishlist morceaux vide.</div></td></tr>'; return; }
   tbody.innerHTML=list.map(w=>`<tr>
     <td style="font-weight:500">${esc(w.title)}</td>
-    <td style="font-size:12px;color:var(--text2)">${esc(w.artist)}</td>
+    <td style="font-size:12px;color:var(--text2)">${artistLink(w.artist)}</td>
     <td style="font-size:11px;color:var(--text3)">${esc(w.album||'–')}</td>
     <td style="font-size:12px">${prioL[w.prio]||w.prio}</td>
     <td style="display:flex;gap:4px">
@@ -9003,7 +9005,7 @@ function renderStock() {
           <div class="artist-avatar">${initials(s.artist)}</div>
           <div class="artist-info">
             <div class="name">${esc(s.album)}</div>
-            <div class="sub">${esc(s.artist)}</div>
+            <div class="sub">${artistLink(s.artist)}</div>
           </div>
         </div>
       </td>
@@ -10018,7 +10020,7 @@ function renderRYMOwnershipAuditList() {
           <div style="flex:1">
             <div class="missing-info" style="margin:0">
               <div class="title" style="font-size:13px">${esc(r.album)}</div>
-              <div class="sub" style="font-size:11px">${esc(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
+              <div class="sub" style="font-size:11px">${artistLink(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
             </div>
           </div>
           ${r.rating ? rymStars(r.rating) : '<span style="color:var(--text3);font-size:11px">Non noté</span>'}
@@ -10177,7 +10179,7 @@ function renderRYM() {
           <div style="flex:1">
             <div class="missing-info" style="margin:0">
               <div class="title">${esc(r.album)}</div>
-              <div class="sub">${esc(r.artist)}${r.year ? ' · ' + r.year : ''}</div>
+              <div class="sub">${artistLink(r.artist)}${r.year ? ' · ' + r.year : ''}</div>
             </div>
           </div>
           ${rymStars(r.rating)}
@@ -10205,7 +10207,7 @@ function renderRYM() {
         <div class="missing-card" style="padding:10px 14px;gap:10px">
           <div class="missing-info" style="min-width:0;flex:1">
             <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.album)}</div>
-            <div class="sub" style="font-size:11px">${esc(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
+            <div class="sub" style="font-size:11px">${artistLink(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
           </div>
           <div style="display:flex;gap:5px;flex-shrink:0">
             <button class="btn btn-sm" onclick="openRYMUnratedAssocIdx(${unrated.indexOf(r)})" title="Associer à un album de la collection">🔗 Associer</button>
@@ -10235,7 +10237,7 @@ function renderRYM() {
         <div class="missing-card" style="padding:10px 14px;gap:10px">
           <div class="missing-info" style="min-width:0;flex:1">
             <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.album)}</div>
-            <div class="sub" style="font-size:11px">${esc(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
+            <div class="sub" style="font-size:11px">${artistLink(r.artist)}${r.year ? ' · ' + r.year : ''} ${own}</div>
             <div style="margin-top:4px">${ratingHtml}</div>
           </div>
           <div style="display:flex;gap:5px;flex-shrink:0">
@@ -10277,7 +10279,7 @@ function renderRYM() {
             <div class="missing-info" style="min-width:0;flex:1">
               <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.album)}</div>
               <div class="sub" style="font-size:11px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <span>${esc(r.artist)}${r.year ? ' · ' + r.year : ''}</span>
+                <span>${artistLink(r.artist)}${r.year ? ' · ' + r.year : ''}</span>
                 ${own}
               </div>
               <div style="margin-top:3px;display:flex;align-items:center;gap:8px">
@@ -15366,7 +15368,7 @@ function renderAudit() {
 // notation (boutons covers-filter-btn) plutôt qu'un vrai système de nav — ce sont 3 vues
 // mutuellement exclusives DANS le même écran, pas 3 destinations de navigation distinctes.
 function switchImportTab(tab) {
-  ['sources', 'assoc', 'missingids'].forEach(t => {
+  ['sources', 'assoc', 'missingids', 'covers', 'completeness', 'audit', 'journal'].forEach(t => {
     const el = document.getElementById('import-tab-' + t);
     if (el) el.style.display = t === tab ? '' : 'none';
     const btn = document.getElementById('import-tab-btn-' + t);
@@ -15374,6 +15376,10 @@ function switchImportTab(tab) {
   });
   if (tab === 'assoc') renderAssocReview();
   if (tab === 'missingids') renderMissingIds();
+  if (tab === 'covers') renderCoversGallery();
+  if (tab === 'completeness') renderCompleteness();
+  if (tab === 'audit') renderAudit();
+  if (tab === 'journal') renderJournal();
 }
 
 // ===================== IDs MANQUANTS =====================
@@ -15778,6 +15784,7 @@ async function loadArtistView(artist) {
         type: normalizeArtistViewType(g['primary-type']),
         owned: !!album,
         albumId: album?.id || null,
+        hasCd: !!album?.has_cd,
         note: album?.note || 0,
         rymRating: rymEntry?.rating || 0,
         plays: album ? (album.plays || 0) : (lfByTitle.get(key) || 0),
@@ -15826,6 +15833,11 @@ function renderArtistView() {
   rows.forEach(r => byType[r.type].push(r));
   const countStr = (arr) => `${arr.filter(r => r.owned).length}/${arr.length}`;
   const pctAlbums = byType.Album.length ? Math.round(byType.Album.filter(r => r.owned).length / byType.Album.length * 100) : 0;
+  // Distinction CD / numérique (demandé par Antoine) — sur les albums possédés uniquement,
+  // même logique que le badge par ligne plus bas (r.hasCd, dérivé de album.has_cd).
+  const albumsOwned = byType.Album.filter(r => r.owned);
+  const albumsCd = albumsOwned.filter(r => r.hasCd).length;
+  const albumsDigital = albumsOwned.length - albumsCd;
 
   const header = `
     <div class="card" style="margin-bottom:16px">
@@ -15838,7 +15850,7 @@ function renderArtistView() {
       </div>
       ${stats.genres.length ? `<div style="font-size:11px;color:var(--text3);margin-bottom:12px">${esc(stats.genres.slice(0, 4).join(' · '))}</div>` : '<div style="margin-bottom:12px"></div>'}
       <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center">
-        <div><div style="font-size:20px;font-weight:600;color:var(--accent)">${countStr(byType.Album)}</div><div style="font-size:11px;color:var(--text3)">💿 albums (${pctAlbums}%)</div></div>
+        <div><div style="font-size:20px;font-weight:600;color:var(--accent)">${countStr(byType.Album)}</div><div style="font-size:11px;color:var(--text3)">💿 albums (${pctAlbums}%)</div>${albumsOwned.length ? `<div style="font-size:10px;color:var(--text3);opacity:0.8">${albumsCd} CD · ${albumsDigital} num.</div>` : ''}</div>
         <div><div style="font-size:20px;font-weight:600">${countStr(byType.EP)}</div><div style="font-size:11px;color:var(--text3)">📀 EP</div></div>
         <div><div style="font-size:20px;font-weight:600">${countStr(byType.Single)}</div><div style="font-size:11px;color:var(--text3)">🎵 singles</div></div>
         <div><div style="font-size:20px;font-weight:600">${stats.totalPlays.toLocaleString('fr-FR')}</div><div style="font-size:11px;color:var(--text3)">écoutes last.fm (tout l'artiste)</div></div>
@@ -15897,7 +15909,9 @@ function renderArtistView() {
 
   const list = filtered.map(r => {
     const statusBadge = r.owned
-      ? '<span class="badge" style="background:rgba(100,220,100,0.08);color:#6ddc6d;border-color:rgba(100,220,100,0.25)">✅ Possédé</span>'
+      ? (r.hasCd
+          ? '<span class="badge" style="background:rgba(100,220,100,0.08);color:#6ddc6d;border-color:rgba(100,220,100,0.25)">💿 CD</span>'
+          : '<span class="badge" style="background:rgba(100,180,220,0.08);color:#6dc4dc;border-color:rgba(100,180,220,0.25)">💻 Numérique</span>')
       : '<span class="badge">⬜ Manquant</span>';
     const wishBadge = r.wishlisted ? '<span class="badge" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>' : '';
     const typeBadge = (!_artistViewTypeFilter && r.type !== 'Album') ? `<span class="badge">${esc(r.type)}</span>` : '';

@@ -82,6 +82,9 @@
 <!-- APP_VERSION: v2026.07.13-06 — 🔁 Réinitialisation des filtres + tri ascendant/descendant, demandé par Antoine. Bouton "↺" (même modèle que resetRymFilters()/resetCoversFilters()/resetCompletenessFilters() déjà existants) ajouté à Collection, Discographie, Stock, Wishlist albums et Wishlist morceaux — remet chaque champ de filtre à sa valeur par défaut (texte vide, select à sa 1ère option, y compris masquage des champs valeur des filtres de note via onNoteOpChange()) puis relance le rendu ; ne touche pas au tri (préférence d'affichage) ni aux préréglages enregistrés. Tri ascendant/descendant : bouton ▼/▲ à bascule ajouté à côté des sélecteurs de tri de Collection (sort-col) et Discographie (disco-sort) — seules vues du groupe demandé à avoir un tel sélecteur (Stock et Wishlist n'en ont pas). Implémenté comme un simple multiplicateur (_sortAscCollection/_sortAscDisco, ±1) appliqué au comparateur existant dans sortedAlbums()/discoFilteredList(), sans dupliquer la logique de tri par colonne. -->
 <!-- APP_VERSION: v2026.07.13-07 — 🐛 Correctif migration IndexedDB : statuts last.fm (albums ignorés/à écouter, morceaux likés) perdus après rechargement. Repéré par Antoine sur le dépôt de test ("je n'ai plus les albums last.fm ignorés depuis la bascule locale"). Root cause : migrateSupabaseToIndexedDB() s'appuyait sur saveToSupabase() pour tout persister dans IndexedDB en fin de migration — mais lastfm_status/lastfm_track_status/lastfm_loved (clés de la table meta) ne sont PAS couvertes par le batch de saveToSupabase(), elles ne sont écrites que par leurs fonctions dédiées (setLastfmStatus() et équivalents), jamais par le batch général. loadFromSupabase()/loadLastfmFromSupabase() les avaient bien chargées en mémoire depuis le vrai Supabase pendant la migration (d'où leur présence correcte le temps de cette 1ère session), mais sans écriture explicite elles ne survivaient pas au rechargement suivant. Corrigé : ces 3 clés sont désormais upsert explicitement dans le shim juste après la migration, avant l'appel à saveToSupabase(). ⚠️ Toute migration effectuée avec une version antérieure à celle-ci doit être refaite (vider IndexedDB + localStorage.removeItem('discotheque_idb_migrated') puis recharger) pour récupérer ces statuts. -->
 <!-- APP_VERSION: v2026.07.13-08 — 🧹 Nettoyage complet des messages/libellés "Supabase" devenus trompeurs, demandé par Antoine qui fait désormais du dépôt de test son instance principale. Passage exhaustif (pas juste les 2 messages déjà corrigés en -04) : messages console (sauvegarde/chargement/nettoyage), textes de progression (import XML, sync morceaux, enrichissement MBID ListenBrainz — le fameux "flush Supabase..." vu dans les logs), bouton "Snapshots Supabase" → "Journal / Snapshots", modale Journal (titre + texte + garde-fous "Supabase non connecté" → "Stockage local non initialisé"), confirmation de "☢️ Reset complet last.fm" (n'écrit plus que du local). Laissés inchangés à dessein : les commentaires internes/changelog (historique fidèle à ce qui était vrai au moment où ils ont été écrits) et les messages décrivant une vraie action ponctuelle sur le vrai Supabase (migration initiale, reconnexion manuelle via la clé). Purement cosmétique, aucun changement de comportement. -->
+<!-- APP_VERSION: v2026.07.13-09 — 🗂️ Réorganisation du menu de gauche + liens artiste généralisés, demandé par Antoine. (1) Pochettes/Complétude/Audit collection/Journal retirés du menu de gauche et déplacés en sous-onglets d'Import/Export (même mécanisme switchImportTab() déjà utilisé pour Associations/IDs manquants, v2026.07.12-17) — HTML/logique de rendu inchangés, juste déplacés (sec-covers/sec-completeness/sec-audit/sec-journal → import-tab-covers/completeness/audit/journal, retirés de SECTIONS). (2) Vue Artiste + Artistes similaires regroupés sous une seule entrée de menu ("Vue Artiste") : bandeau de bascule à 2 boutons ajouté en haut des deux sections (même style que les sous-onglets), permettant de passer de l'une à l'autre sans repasser par le menu — les 2 sections elles-mêmes restent inchangées. (3) Vérifié que la Vue Artiste était déjà accessible directement depuis Collection/Discographie/Wishlist albums/Artistes similaires (nom d'artiste déjà cliquable via artistLink(), existant) — étendu aux 4 vues qui ne l'avaient pas encore : Morceaux isolés, Tous les morceaux, Morceaux des albums, Wishlist morceaux, Stock. -->
+<!-- APP_VERSION: v2026.07.13-10 — 🎤 Liens Vue Artiste étendus à last.fm albums/morceaux/RYM + distinction CD/numérique dans la Vue Artiste, demandé par Antoine. (1) artistLink() (déjà utilisé ailleurs) appliqué aux 4 listes de RYM (notés absents, non notés, ownership introuvable, non associés) et aux listes principales de last.fm albums (renderMissing) et last.fm morceaux (renderMissingTracks). (2) Vue Artiste : chaque ligne "possédé" affichait un badge générique "✅ Possédé" sans dire si c'est un CD physique ou un fichier numérique — nouveau champ `hasCd` (dérivé de `album.has_cd`, déjà stocké) sur chaque ligne, badge désormais "💿 CD" ou "💻 Numérique" selon le cas. Ajout d'une répartition "X CD · Y num." sous le compteur d'albums possédés en en-tête, sur les mêmes données. -->
+<!-- APP_VERSION: v2026.07.13-11 — 🔍 Bouton recherche DuckDuckGo dans la modale de choix de pochette (Pochettes manquantes), demandé par Antoine. searchCoverOnDuckDuckGo() ouvre un nouvel onglet avec une recherche d'images pré-remplie ("artiste album album cover"). DuckDuckGo n'a pas d'API d'images publique/gratuite — pas d'intégration directe possible dans la grille de propositions automatiques (Discogs/Last.fm existants) — flux manuel : trouver l'image, copier son URL, la coller dans le champ existant puis "Prévisualiser". -->
 
 
 
@@ -171,26 +174,12 @@
     <span class="nav-icon">⭐</span> RYM
     <span class="nav-badge warn" id="nav-rym-count">0</span>
   </div>
-  <div class="nav-item" onclick="nav('covers')">
-    <span class="nav-icon">🖼</span> Pochettes
-    <span class="nav-badge warn" id="nav-covers-count">0</span>
-  </div>
-  <div class="nav-item" onclick="nav('completeness')">
-    <span class="nav-icon">🧩</span> Complétude
-    <span class="nav-badge warn" id="nav-completeness-count">0</span>
-  </div>
-  <div class="nav-item" onclick="nav('audit')">
-    <span class="nav-icon">🔎</span> Audit collection
-  </div>
   <div class="nav-item" onclick="nav('ratesession')">
     <span class="nav-icon">🎯</span> Session notation
     <span class="nav-badge warn" id="nav-ratesession-count">0</span>
   </div>
   <div class="nav-item" onclick="nav('artistview')">
     <span class="nav-icon">🎤</span> Vue Artiste
-  </div>
-  <div class="nav-item" onclick="nav('artistlinks')">
-    <span class="nav-icon">🕸️</span> Artistes similaires
   </div>
   <div class="nav-item" onclick="nav('marketvalue')">
     <span class="nav-icon">💰</span> Valeur collection
@@ -202,9 +191,6 @@
   <div class="nav-item" onclick="nav('notestoreport')">
     <span class="nav-icon">📋</span> Notes à reporter
     <span class="nav-badge warn" id="nav-notestoreport-count">0</span>
-  </div>
-  <div class="nav-item" onclick="nav('journal')">
-    <span class="nav-icon">📰</span> Journal
   </div>
   <div class="nav-item" onclick="nav('insights')">
     <span class="nav-icon">📊</span> Insights
@@ -237,7 +223,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-08</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-11</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1138,6 +1124,10 @@
         <button class="covers-filter-btn active" id="import-tab-btn-sources" onclick="switchImportTab('sources')">📥 Sources</button>
         <button class="covers-filter-btn" id="import-tab-btn-assoc" onclick="switchImportTab('assoc')">🔗 Associations <span id="nav-assoc-count" style="opacity:0.7">0</span></button>
         <button class="covers-filter-btn" id="import-tab-btn-missingids" onclick="switchImportTab('missingids')">🆔 IDs manquants <span id="import-missingids-badge" style="opacity:0.7">0</span></button>
+        <button class="covers-filter-btn" id="import-tab-btn-covers" onclick="switchImportTab('covers')">🖼 Pochettes <span id="nav-covers-count" style="opacity:0.7">0</span></button>
+        <button class="covers-filter-btn" id="import-tab-btn-completeness" onclick="switchImportTab('completeness')">🧩 Complétude <span id="nav-completeness-count" style="opacity:0.7">0</span></button>
+        <button class="covers-filter-btn" id="import-tab-btn-audit" onclick="switchImportTab('audit')">🔎 Audit collection</button>
+        <button class="covers-filter-btn" id="import-tab-btn-journal" onclick="switchImportTab('journal')">📰 Journal</button>
       </div>
 
       <div id="import-tab-sources">
@@ -1338,10 +1328,10 @@
           </table>
         </div>
       </div>
-    </div>
+    <!-- fin import-tab-missingids ; sec-import se referme après Journal plus bas -->
 
-    <!-- POCHETTES -->
-    <div class="section" id="sec-covers">
+    <!-- POCHETTES (sous-onglet Import/Export, déplacé depuis un onglet dédié) -->
+    <div id="import-tab-covers" style="display:none">
       <div class="covers-toolbar">
         <button class="covers-filter-btn active" id="cf-btn-missing" onclick="setCoverFilter('missing')">Sans pochette</button>
         <button class="covers-filter-btn" id="cf-btn-lowres" onclick="setCoverFilter('lowres')">Basse résolution</button>
@@ -1380,7 +1370,7 @@
     </div>
 
     <!-- ==================== COMPLÉTUDE DES FICHES ==================== -->
-    <div class="section" id="sec-completeness">
+    <div id="import-tab-completeness" style="display:none">
       <div class="toolbar" style="margin-bottom:12px">
         <input type="text" id="completeness-search" placeholder="Filtrer artiste/album…" oninput="completenessPage=1;renderCompleteness()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:220px"/>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">
@@ -1401,7 +1391,7 @@
     </div>
 
     <!-- AUDIT COLLECTION -->
-    <div class="section" id="sec-audit">
+    <div id="import-tab-audit" style="display:none">
       <div style="display:flex;flex-wrap:wrap;gap:16px">
 
         <div style="flex:1 1 420px;min-width:320px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
@@ -1448,6 +1438,23 @@
 
       </div>
     </div>
+
+    <!-- JOURNAL (sous-onglet Import/Export, déplacé depuis un onglet dédié) -->
+    <div id="import-tab-journal" style="display:none">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        Compare l'état actuel de la collection à un snapshot précédent — pratique pour vérifier l'effet d'un import XML/CSV sans passer par la console.
+        Un snapshot doit exister au préalable (bouton "📸 Nouveau snapshot" ci-dessous, ou pris automatiquement avant une suppression massive).
+      </div>
+      <div class="covers-toolbar">
+        <select id="journal-snapshot-select" style="min-width:320px"></select>
+        <button class="btn btn-sm" onclick="compareJournal()">🔍 Comparer</button>
+        <button class="btn btn-sm" onclick="manualSnapshot().then(renderJournal)">📸 Nouveau snapshot</button>
+        <div style="flex:1"></div>
+        <span id="journal-status" style="font-size:12px;color:var(--text3)"></span>
+      </div>
+      <div id="journal-results"></div>
+    </div>
+    </div><!-- /sec-import -->
 
     <!-- SESSION DE NOTATION -->
     <div class="section" id="sec-ratesession">
@@ -1522,6 +1529,10 @@
 
     <!-- VUE ARTISTE -->
     <div class="section" id="sec-artistview">
+      <div class="covers-toolbar" style="margin-bottom:14px">
+        <button class="covers-filter-btn active">🎤 Vue Artiste</button>
+        <button class="covers-filter-btn" onclick="nav('artistlinks')">🕸️ Artistes similaires</button>
+      </div>
       <div class="toolbar" style="margin-bottom:16px">
         <input type="text" id="av-search" placeholder="Nom d'artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:13px;padding:8px 12px;border-radius:var(--radius);outline:none;flex:1;max-width:360px" onkeydown="if(event.key==='Enter'){event.preventDefault();searchArtistView();}">
         <button class="btn btn-accent" onclick="searchArtistView()">🔍 Rechercher</button>
@@ -1529,8 +1540,13 @@
       <div id="av-content"></div>
     </div>
 
-    <!-- ARTISTES SIMILAIRES (crédits MusicBrainz croisés avec la collection) -->
+    <!-- ARTISTES SIMILAIRES (crédits MusicBrainz croisés avec la collection) — regroupé avec
+         Vue Artiste sous une seule entrée de menu (bandeau de bascule ci-dessus/ci-dessous) -->
     <div class="section" id="sec-artistlinks">
+      <div class="covers-toolbar" style="margin-bottom:14px">
+        <button class="covers-filter-btn" onclick="nav('artistview')">🎤 Vue Artiste</button>
+        <button class="covers-filter-btn active">🕸️ Artistes similaires</button>
+      </div>
       <div style="font-size:12px;color:var(--text3);text-align:center;margin-bottom:16px">
         Croise les crédits MusicBrainz (producteur, remix, featuring, membre…) déjà récupérés pour chaque
         album avec les autres artistes de ta collection — révèle des collaborations entre artistes que tu possèdes déjà.
@@ -1608,22 +1624,6 @@
         <thead><tr><th>Type</th><th>Artiste</th><th>Titre</th><th>Note</th><th>Cibles restantes</th><th></th></tr></thead>
         <tbody id="ntr-tbody"></tbody>
       </table></div>
-    </div>
-
-    <!-- ==================== JOURNAL DES CHANGEMENTS ==================== -->
-    <div class="section" id="sec-journal">
-      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
-        Compare l'état actuel de la collection à un snapshot précédent — pratique pour vérifier l'effet d'un import XML/CSV sans passer par la console.
-        Un snapshot doit exister au préalable (bouton "📸 Nouveau snapshot" dans Import/Export, ou pris automatiquement avant une suppression massive).
-      </div>
-      <div class="covers-toolbar">
-        <select id="journal-snapshot-select" style="min-width:320px"></select>
-        <button class="btn btn-sm" onclick="compareJournal()">🔍 Comparer</button>
-        <button class="btn btn-sm" onclick="manualSnapshot().then(renderJournal)">📸 Nouveau snapshot</button>
-        <div style="flex:1"></div>
-        <span id="journal-status" style="font-size:12px;color:var(--text3)"></span>
-      </div>
-      <div id="journal-results"></div>
     </div>
 
     <!-- INSIGHTS -->
@@ -2270,6 +2270,7 @@
       <label>Ou coller une URL manuellement</label>
       <div style="display:flex;gap:8px">
         <input type="text" id="cover-choice-manual-url" placeholder="https://…" style="flex:1;font-size:12px">
+        <button class="btn btn-sm" onclick="searchCoverOnDuckDuckGo()" type="button" title="Ouvre une recherche d'images DuckDuckGo dans un nouvel onglet — clic droit sur l'image trouvée → copier l'adresse de l'image, puis colle-la ici">🔍 DuckDuckGo</button>
         <button class="btn btn-sm" onclick="previewManualCoverUrl()" type="button">Prévisualiser</button>
       </div>
     </div>
