@@ -445,6 +445,73 @@ async function initLocalDB() {
   return window._sb;
 }
 
+// ===================== IMAGE COMPLÈTE INDEXEDDB (v2026.07.13-05) =====================
+// Distincte de exportJSON()/reimportJSON() (qui exclut volontairement musicbee_tracks et
+// lastfm_tracks/_lastfmTrackCounts — cf. commentaire APP_VERSION v2026.07.12-23 : régénérables
+// via resync/réimport, fichier plus léger). Ici c'est l'inverse : on veut une image BRUTE et
+// COMPLÈTE de toutes les "tables" du shim LocalDB telles quelles dans IndexedDB (donc TOUT,
+// y compris album_tracks/musicbee_tracks/lastfm_tracks/collection_snapshots) — pour ne pas
+// avoir à tout resynchroniser depuis last.fm/MusicBee/Discogs après un nettoyage agressif du
+// cache navigateur ("Effacer les données de navigation", mode privé, changement de machine...)
+// qui effacerait IndexedDB. Fichier volontairement plus gros et plus lent à produire — pensé
+// comme une assurance ponctuelle, pas un export de routine (exportJSON() reste le bon choix
+// pour ça).
+async function exportIndexedDBBackup() {
+  toast('Préparation de l\'image IndexedDB (peut prendre quelques secondes)…');
+  try {
+    const db = await idbOpen();
+    const tables = await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const keysReq = store.getAllKeys();
+      const valsReq = store.getAll();
+      let keys, vals;
+      const tryResolve = () => { if (keys && vals) resolve(Object.fromEntries(keys.map((k, i) => [k, vals[i]]))); };
+      keysReq.onsuccess = () => { keys = keysReq.result; tryResolve(); };
+      valsReq.onsuccess = () => { vals = valsReq.result; tryResolve(); };
+      tx.onerror = () => reject(tx.error);
+    });
+    const payload = JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      dbName: IDB_NAME, dbVersion: IDB_VERSION,
+      tables,
+    });
+    download(`discotheque_indexeddb_image_${new Date().toISOString().slice(0, 10)}.json`, payload, 'application/json');
+    toast('✓ Image IndexedDB téléchargée (fichier volumineux — contient tout, y compris lastfm_tracks/musicbee_tracks/tracklists/snapshots)');
+  } catch(e) {
+    console.error('Export image IndexedDB échoué', e);
+    toast('Erreur export image IndexedDB : ' + (e.message || e), 'error');
+  }
+}
+
+async function importIndexedDBBackup(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (!confirm("Ceci va REMPLACER l'intégralité des données locales (IndexedDB) par le contenu de ce fichier.\n\nÀ réserver à la restauration d'une image de sauvegarde après un nettoyage du cache — pas une fusion avec les données actuelles.\n\nContinuer ?")) {
+    input.value = '';
+    return;
+  }
+  try {
+    const parsed = JSON.parse(await file.text());
+    if (!parsed || !parsed.tables) throw new Error('Fichier invalide (pas une image IndexedDB reconnue)');
+    const db = await idbOpen();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      Object.entries(parsed.tables).forEach(([key, value]) => store.put(value, key));
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    toast('✓ Image IndexedDB restaurée — rechargement…');
+    setTimeout(() => location.reload(), 1200);
+  } catch(e) {
+    console.error('Import image IndexedDB échoué', e);
+    toast('Erreur import image IndexedDB : ' + (e.message || e), 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
 // ===================== SYNC CONFLICT DETECTION (v2026.07.09) =====================
 // Compteur atomique meta.sync_state.version : chaque saveToSupabase() réussie l'incrémente.
 // _localSyncVersion = dernière version connue par CET onglet (fixée au chargement et après
