@@ -79,6 +79,8 @@
 <!-- APP_VERSION: v2026.07.13-03 — 🐛 startup() ne re-migrait pas automatiquement si IndexedDB était vidée manuellement (ex: devtools, tests) alors que le marqueur localStorage discotheque_idb_migrated restait posé — repéré par Antoine sur le dépôt de test : après suppression de la base pour retester le correctif v2026.07.13-02, l'app chargeait silencieusement une collection à 0 album au lieu de redéclencher la migration, sans indice pour comprendre pourquoi (l'écran de config ne réapparaît pas non plus tant qu'une clé Supabase est déjà enregistrée). Corrigé : si loadLocalCollection() ne trouve rien dans IndexedDB ET qu'une clé Supabase est connue, migrateSupabaseToIndexedDB() est retentée automatiquement avant de retomber sur la démo — traite IndexedDB vide + clé connue comme un signal de base vidée plutôt que comme un vrai premier lancement. -->
 <!-- APP_VERSION: v2026.07.13-04 — 🧹 Libellés trompeurs "...dans Supabase"/"vers Supabase" corrigés (console + barre de progression sync last.fm + confirmation restauration snapshot), repérés par Antoine sur le dépôt de test : ces textes étaient écrits en dur à l'époque où window._sb ne pouvait être que le vrai client Supabase — ils s'affichaient donc encore tels quels alors que ces opérations écrivent maintenant dans IndexedDB via le shim (Phase 1 migration). Purement cosmétique, aucun changement de comportement. -->
 <!-- APP_VERSION: v2026.07.13-05 — 💾 Image complète IndexedDB (export/import), demandé par Antoine en assurance contre un nettoyage agressif du cache navigateur qui effacerait IndexedDB. Distincte de exportJSON()/reimportJSON() (qui exclut volontairement musicbee_tracks/lastfm_tracks — cf. v2026.07.12-23, régénérables, fichier plus léger) : exportIndexedDBBackup() télécharge une image brute et complète de TOUTES les "tables" du shim LocalDB telles quelles (albums/tracks/associations/lastfm_data/rym_data/meta/sync_state/album_tracks/musicbee_tracks/lastfm_tracks/collection_snapshots...), en énumérant dynamiquement les clés réellement présentes dans IndexedDB plutôt qu'une liste figée en dur. importIndexedDBBackup() restaure tel quel (écrase, ne fusionne pas) puis recharge la page. Fichier volontairement plus gros et plus lent — pensé comme un usage ponctuel, pas une routine (le JSON existant reste le bon choix pour ça). Testé en Node (fake-indexeddb) : export puis restauration dans une instance LocalDB neuve (sans cache applicatif) pour confirmer que les données sont bien écrites sur le disque IndexedDB, pas seulement en mémoire. -->
+<!-- APP_VERSION: v2026.07.13-06 — 🔁 Réinitialisation des filtres + tri ascendant/descendant, demandé par Antoine. Bouton "↺" (même modèle que resetRymFilters()/resetCoversFilters()/resetCompletenessFilters() déjà existants) ajouté à Collection, Discographie, Stock, Wishlist albums et Wishlist morceaux — remet chaque champ de filtre à sa valeur par défaut (texte vide, select à sa 1ère option, y compris masquage des champs valeur des filtres de note via onNoteOpChange()) puis relance le rendu ; ne touche pas au tri (préférence d'affichage) ni aux préréglages enregistrés. Tri ascendant/descendant : bouton ▼/▲ à bascule ajouté à côté des sélecteurs de tri de Collection (sort-col) et Discographie (disco-sort) — seules vues du groupe demandé à avoir un tel sélecteur (Stock et Wishlist n'en ont pas). Implémenté comme un simple multiplicateur (_sortAscCollection/_sortAscDisco, ±1) appliqué au comparateur existant dans sortedAlbums()/discoFilteredList(), sans dupliquer la logique de tri par colonne. -->
+<!-- APP_VERSION: v2026.07.13-07 — 🐛 Correctif migration IndexedDB : statuts last.fm (albums ignorés/à écouter, morceaux likés) perdus après rechargement. Repéré par Antoine sur le dépôt de test ("je n'ai plus les albums last.fm ignorés depuis la bascule locale"). Root cause : migrateSupabaseToIndexedDB() s'appuyait sur saveToSupabase() pour tout persister dans IndexedDB en fin de migration — mais lastfm_status/lastfm_track_status/lastfm_loved (clés de la table meta) ne sont PAS couvertes par le batch de saveToSupabase(), elles ne sont écrites que par leurs fonctions dédiées (setLastfmStatus() et équivalents), jamais par le batch général. loadFromSupabase()/loadLastfmFromSupabase() les avaient bien chargées en mémoire depuis le vrai Supabase pendant la migration (d'où leur présence correcte le temps de cette 1ère session), mais sans écriture explicite elles ne survivaient pas au rechargement suivant. Corrigé : ces 3 clés sont désormais upsert explicitement dans le shim juste après la migration, avant l'appel à saveToSupabase(). ⚠️ Toute migration effectuée avec une version antérieure à celle-ci doit être refaite (vider IndexedDB + localStorage.removeItem('discotheque_idb_migrated') puis recharger) pour récupérer ces statuts. -->
 
 
 
@@ -234,7 +236,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-05</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-07</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -337,11 +339,13 @@
           <option value="rym">Tri : Note RYM</option>
           <option value="plays">Tri : Écoutes</option>
         </select>
+        <button class="btn btn-sm" id="sort-col-dir-btn" onclick="toggleSortDirection('collection')" title="Inverser le sens du tri">▼</button>
         <select id="filter-preset-select" onchange="applyFilterPreset('collection')" title="Charger un préréglage de filtres enregistré">
           <option value="">💾 Filtres…</option>
         </select>
         <button class="btn btn-sm" onclick="saveCurrentFilterPreset('collection')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
         <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('collection')" title="Supprimer le préréglage sélectionné">✕</button>
+        <button class="btn btn-sm" onclick="resetCollectionFilters()" title="Réinitialiser les filtres">↺</button>
         <div class="toolbar-right">
           <span id="albums-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportFilteredAlbumsCSV()">↓ CSV</button>
@@ -542,11 +546,13 @@
           <option value="rym">Tri : Note RYM</option>
           <option value="plays">Tri : Écoutes</option>
         </select>
+        <button class="btn btn-sm" id="disco-sort-dir-btn" onclick="toggleSortDirection('discographie')" title="Inverser le sens du tri">▼</button>
         <select id="filter-preset-select-disco" onchange="applyFilterPreset('discographie')" title="Charger un préréglage de filtres enregistré">
           <option value="">💾 Filtres…</option>
         </select>
         <button class="btn btn-sm" onclick="saveCurrentFilterPreset('discographie')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
         <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('discographie')" title="Supprimer le préréglage sélectionné">✕</button>
+        <button class="btn btn-sm" onclick="resetDiscoFilters()" title="Réinitialiser les filtres">↺</button>
         <button class="btn btn-sm btn-accent" onclick="openCdAssocFinderModal()">🔗 Suggestions d'association</button>
         <button class="btn btn-sm" onclick="exportDiscoCSV()">↓ CSV</button>
       </div>
@@ -638,6 +644,7 @@
         </select>
         <button class="btn btn-sm" onclick="saveCurrentFilterPreset('stock')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
         <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('stock')" title="Supprimer le préréglage sélectionné">✕</button>
+        <button class="btn btn-sm" onclick="resetStockFilters()" title="Réinitialiser les filtres">↺</button>
         <div class="toolbar-right">
           <button class="btn btn-sm" onclick="exportStockCSV()">↓ Export</button>
         </div>
@@ -874,6 +881,7 @@
         </select>
         <button class="btn btn-sm" onclick="saveCurrentFilterPreset('wishlist')" title="Enregistrer la combinaison de filtres actuelle sous un nom">💾</button>
         <button class="btn btn-sm" onclick="deleteSelectedFilterPreset('wishlist')" title="Supprimer le préréglage sélectionné">✕</button>
+        <button class="btn btn-sm" onclick="resetWishlistFilters()" title="Réinitialiser les filtres">↺</button>
         <div class="toolbar-right">
           <span id="wish-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-sm" onclick="exportWishlistCSV()" title="Exporter CSV">⬇ CSV</button>
@@ -1111,6 +1119,7 @@
       <div class="toolbar" style="margin-bottom:12px">
         <input id="filter-tw-artist" type="text" placeholder="Artiste…" oninput="renderTrackWishlist()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
         <input id="filter-tw-title" type="text" placeholder="Titre…" oninput="renderTrackWishlist()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px"/>
+        <button class="btn btn-sm" onclick="resetTrackWishlistFilters()" title="Réinitialiser les filtres">↺</button>
         <div class="toolbar-right">
           <span id="tw-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
           <button class="btn btn-accent" onclick="openTrackWishModal()">＋ Ajouter</button>
