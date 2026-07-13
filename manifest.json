@@ -1,0 +1,16 @@
+{
+  "name": "Discothèque — Terant Music Collection",
+  "short_name": "Discothèque",
+  "description": "Gestion de collection musicale personnelle (CD, numérique, wishlist, last.fm, RYM, Discogs).",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e0e0f",
+  "theme_color": "#0e0e0f",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
