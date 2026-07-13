@@ -61,6 +61,27 @@ let marketValueHistory = []; // [{ month:'YYYY-MM', total, count, currency }]
 let modalNote = 0;
 let trackNote = 0;
 let currentPage = 1;
+// Tri ascendant/descendant (v2026.07.13-06, demandé par Antoine) — Collection et Discographie
+// uniquement (seules vues du groupe demandé à avoir un sélecteur de tri ; Stock et Wishlist
+// n'en ont pas). false = comportement historique (défaut par colonne : A→Z pour texte, valeur
+// la plus haute d'abord pour année/notes/écoutes) ; true = sens inversé. Un simple multiplicateur
+// appliqué au comparateur existant (cf. sortedAlbums()/discoFilteredList()), pas de logique de
+// tri dupliquée.
+let _sortAscCollection = false;
+let _sortAscDisco = false;
+function toggleSortDirection(view) {
+  if (view === 'collection') {
+    _sortAscCollection = !_sortAscCollection;
+    const btn = document.getElementById('sort-col-dir-btn');
+    if (btn) btn.textContent = _sortAscCollection ? '▲' : '▼';
+    renderAlbums();
+  } else if (view === 'discographie') {
+    _sortAscDisco = !_sortAscDisco;
+    const btn = document.getElementById('disco-sort-dir-btn');
+    if (btn) btn.textContent = _sortAscDisco ? '▲' : '▼';
+    renderDiscographie();
+  }
+}
 let discoPage = 1;
 const PAGE_SIZE = 30;
 let nextId = 1; // conservé pour tracks isolés uniquement
@@ -704,6 +725,19 @@ async function migrateSupabaseToIndexedDB(anonKey) {
     window._sb = localSb; // retour au shim IndexedDB pour tout ce qui suit
     if (rawAlbumTracks.length) await window._sb.from('album_tracks').insert(rawAlbumTracks);
     if (rawMbTracks.length) await window._sb.from('musicbee_tracks').insert(rawMbTracks);
+    // lastfm_status/lastfm_track_status/lastfm_loved ne sont PAS couverts par saveToSupabase()
+    // ci-dessous : ces 3 clés meta ne sont écrites que par leurs fonctions dédiées
+    // (setLastfmStatus(), l'équivalent pour lastfm_track_status, et la persistance des loved
+    // tracks), jamais par le batch général. loadFromSupabase()/loadLastfmFromSupabase() les
+    // avaient bien chargées en mémoire (_lastfmStatus/_lastfmTrackStatus/_lovedTracks) depuis le
+    // vrai Supabase ci-dessus, mais sans cette écriture explicite elles restaient seulement en
+    // mémoire pour cette session et disparaissaient au rechargement suivant — bug trouvé par
+    // Antoine ("je n'ai plus les albums last.fm ignorés depuis la bascule locale").
+    await window._sb.from('meta').upsert([
+      { key: 'lastfm_status', value: JSON.stringify(_lastfmStatus) },
+      { key: 'lastfm_track_status', value: JSON.stringify(_lastfmTrackStatus) },
+      { key: 'lastfm_loved', value: JSON.stringify([..._lovedTracks]) },
+    ], { onConflict: 'key' });
     if (albums.length > 0) await saveToSupabase(); // écrit albums/tracks/wishlist/etc. dans IndexedDB
     localStorage.setItem(LS_IDB_MIGRATED, '1');
     _dataReady = true;
@@ -944,7 +978,7 @@ async function saveToSupabase(opts) {
     for (let i = 0; i < toDelete.length; i += 200) {
       await window._sb.from('albums').delete().in('id', toDelete.slice(i, i + 200));
     }
-    if (toDelete.length) console.log(`Supabase : ${toDelete.length} albums supprimés`);
+    if (toDelete.length) console.log(`${toDelete.length} albums supprimés (sync)`);
 
     // ── Tracks isolés (PK composite artist_norm+title_norm) ──────────────────
     // Dédoublonner par PK avant upsert
@@ -1082,7 +1116,7 @@ async function saveToSupabase(opts) {
     setSaveIndicator('saved', now);
   } catch(e) {
     setSaveIndicator('error');
-    console.error('Supabase save error:', e);
+    console.error('Erreur de sauvegarde :', e);
   } finally {
     _savingToSupabase = false;
   }
@@ -1343,7 +1377,7 @@ async function loadFromSupabase() {
     setSaveIndicator('saved');
     return true;
   } catch(e) {
-    console.error('Supabase load error:', e);
+    console.error('Erreur de chargement :', e);
     return false;
   }
 }
@@ -2337,22 +2371,23 @@ function filteredAlbums() {
 
 function sortedAlbums(list) {
   const col = document.getElementById('sort-col').value;
+  const dir = _sortAscCollection ? -1 : 1;
   if (col === 'rym') {
     return [...list].sort((a, b) => {
       const ra = (lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id))?.rating || 0;
       const rb = (lookupRym(b.artist, b.album, b.id) || lookupRym(cleanDiscogsArtist(b.artist), b.album, b.id))?.rating || 0;
-      return rb - ra;
+      return dir * (rb - ra);
     });
   }
   if (col === 'dc') {
-    return [...list].sort((a, b) => (b.discogsRating||0) - (a.discogsRating||0));
+    return [...list].sort((a, b) => dir * ((b.discogsRating||0) - (a.discogsRating||0)));
   }
   return [...list].sort((a, b) => {
-    if (col === 'year') return (b.year||0) - (a.year||0);
-    if (col === 'note') return (b.note||0) - (a.note||0);
-    if (col === 'plays') return (b.plays||0) - (a.plays||0);
+    if (col === 'year') return dir * ((b.year||0) - (a.year||0));
+    if (col === 'note') return dir * ((b.note||0) - (a.note||0));
+    if (col === 'plays') return dir * ((b.plays||0) - (a.plays||0));
     const av = (a[col]||'').toLowerCase(), bv = (b[col]||'').toLowerCase();
-    return av < bv ? -1 : av > bv ? 1 : 0;
+    return dir * (av < bv ? -1 : av > bv ? 1 : 0);
   });
 }
 
@@ -5315,12 +5350,12 @@ window._skipLoadAlbumTracks = true;
     const removedStr = removedAlbums ? `, ${removedAlbums} supprimés` : '';
     toast(`MusicBee XML : ${albumsAdded} nouveaux, ${trackDelta} morceaux, ${stockDelta} stock${removedStr}`);
 
-    // Sauvegarde directe (sans debounce) pour garantir que Supabase reçoit toutes les mises à jour
+    // Sauvegarde directe (sans debounce) pour garantir une écriture immédiate de toutes les mises à jour
     if (window._sb) {
-      status.textContent += ' — synchronisation Supabase…';
+      status.textContent += ' — sauvegarde…';
       setSaveIndicator('saving');
       await saveToSupabase();
-      status.textContent = status.textContent.replace(' — synchronisation Supabase…', ' — ✓ synchronisé');
+      status.textContent = status.textContent.replace(' — sauvegarde…', ' — ✓ synchronisé');
     } else {
       _saveToStorageImpl();
     }
@@ -5701,7 +5736,7 @@ async function fetchLastfmIncrementalSilent(fromTs) {
         if (!updDedup.has(k) || r.plays > (updDedup.get(k).plays||0)) updDedup.set(k, r);
       });
       await sbUpsert('lastfm_data', [...updDedup.values()], 'artist,album');
-    } catch(e) { console.error('Erreur sauvegarde lastfm Supabase:', e); }
+    } catch(e) { console.error('Erreur sauvegarde lastfm :', e); }
   }
 
   renderAlbums();
@@ -5821,7 +5856,7 @@ async function startTrackSync() {
   if (!apiKey || !user) { status.textContent = 'Clé API et nom d\'utilisateur requis.'; return; }
 
   if (!window._sb) {
-    status.textContent = 'Supabase non connecté — la table lastfm_tracks ne sera pas remplie.';
+    status.textContent = 'Stockage local non initialisé — la table lastfm_tracks ne sera pas remplie.';
     status.className = 'status err';
     return;
   }
@@ -5926,9 +5961,9 @@ async function startTrackSync() {
         try { localStorage.setItem(TRACK_CP_KEY, JSON.stringify({ page: page + 1, totalPages, counts: compact, savedAt: Date.now() })); } catch(e) {}
       }
 
-      // Flush Supabase toutes les 50 pages
+      // Flush périodique toutes les 50 pages
       if (page % 50 === 0) {
-        progressLabel.textContent += ' — flush Supabase…';
+        progressLabel.textContent += ' — sauvegarde…';
         await flushTrackCountsToSupabase();
         // Mise à jour badge nav morceaux manquants
         invalidateCache();
@@ -6338,10 +6373,10 @@ async function syncListenBrainz() {
       bar.style.width = pct + '%';
       progressLabel.textContent = `${totalFetched.toLocaleString('fr-FR')} / ${totalListens.toLocaleString('fr-FR')} écoutes parcourues — ${albumsMbidEnriched} album(s) + ${tracksMbidEnriched} morceau(x) enrichis en MBID`;
 
-      // Checkpoint + flush Supabase toutes les 50 000 écoutes
+      // Checkpoint + flush périodique toutes les 50 000 écoutes
       if (totalFetched > 0 && totalFetched % 50000 < 1000) {
         _saveLbCheckpoint(maxTs, totalFetched);
-        progressLabel.textContent += ' — flush Supabase…';
+        progressLabel.textContent += ' — sauvegarde…';
         await _flushLbToSupabase(false);
       }
 
@@ -9224,18 +9259,19 @@ function discoFilteredList() {
     });
   }
 
+  const dir = _sortAscDisco ? -1 : 1;
   return [...list].sort((a, b) => {
-    if (sort === 'year')  return (b.year || 0) - (a.year || 0);
-    if (sort === 'album') return (a.album || '').localeCompare(b.album || '', 'fr');
-    if (sort === 'note')  return (b.note || 0) - (a.note || 0);
-    if (sort === 'dc')    return (b.discogsRating || 0) - (a.discogsRating || 0);
+    if (sort === 'year')  return dir * ((b.year || 0) - (a.year || 0));
+    if (sort === 'album') return dir * (a.album || '').localeCompare(b.album || '', 'fr');
+    if (sort === 'note')  return dir * ((b.note || 0) - (a.note || 0));
+    if (sort === 'dc')    return dir * ((b.discogsRating || 0) - (a.discogsRating || 0));
     if (sort === 'rym')   {
       const ra = (lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id))?.rating || 0;
       const rb = (lookupRym(b.artist, b.album, b.id) || lookupRym(cleanDiscogsArtist(b.artist), b.album, b.id))?.rating || 0;
-      return rb - ra;
+      return dir * (rb - ra);
     }
-    if (sort === 'plays') return (b.plays || 0) - (a.plays || 0);
-    return (a.artist || '').localeCompare(b.artist || '', 'fr');
+    if (sort === 'plays') return dir * ((b.plays || 0) - (a.plays || 0));
+    return dir * (a.artist || '').localeCompare(b.artist || '', 'fr');
   });
 }
 
@@ -10036,6 +10072,57 @@ function resetRymFilters() {
   const genreSel = document.getElementById('filter-rym-genre');
   if (genreSel) genreSel.value = '';
   renderRYM();
+}
+
+// Réinitialisation des filtres — Collection/Discographie/Stock/Wishlist (v2026.07.13-06,
+// demandé par Antoine). Même principe que resetRymFilters()/resetCoversFilters()/
+// resetCompletenessFilters() ci-dessus/dessous : remet chaque champ à sa valeur par défaut
+// (texte vide, select à sa 1ère option) puis relance le rendu. Ne touche PAS au tri (préférence
+// d'affichage, pas un filtre) ni aux préréglages enregistrés (filter-preset-select-*).
+function resetCollectionFilters() {
+  ['filter-artist', 'filter-album', 'filter-year'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['filter-support', 'filter-folder', 'filter-genre', 'filter-wishlist', 'filter-min-plays',
+   'filter-note-op', 'filter-dc-note-op', 'filter-rym-note-op'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['filter-note-val', 'filter-dc-note-val', 'filter-rym-note-val'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  onNoteOpChange('filter-note-op', 'filter-note-val');
+  onNoteOpChange('filter-dc-note-op', 'filter-dc-note-val');
+  onNoteOpChange('filter-rym-note-op', 'filter-rym-note-val');
+  currentPage = 1;
+  renderAlbums();
+}
+
+function resetDiscoFilters() {
+  const discoFilterSel = document.getElementById('disco-filter');
+  if (discoFilterSel) discoFilterSel.value = 'all'; // "Tous les CDs" — 1ère option, mais pas ''
+  ['disco-filter-type', 'filter-disco-genre', 'filter-disco-min-plays',
+   'filter-disco-note-op', 'filter-disco-dc-op', 'filter-disco-rym-op'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['filter-disco-artist', 'filter-disco-album', 'filter-disco-year'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['filter-disco-note-val', 'filter-disco-dc-val', 'filter-disco-rym-val'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  onNoteOpChange('filter-disco-note-op', 'filter-disco-note-val');
+  onNoteOpChange('filter-disco-dc-op', 'filter-disco-dc-val');
+  onNoteOpChange('filter-disco-rym-op', 'filter-disco-rym-val');
+  renderDiscographie();
+}
+
+function resetStockFilters() {
+  ['filter-stock-artist', 'filter-stock-genre', 'filter-stock-note-op'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const yearEl = document.getElementById('filter-stock-year');
+  if (yearEl) yearEl.value = '';
+  const valEl = document.getElementById('filter-stock-note-val');
+  if (valEl) valEl.value = '';
+  onNoteOpChange('filter-stock-note-op', 'filter-stock-note-val');
+  renderStock();
+}
+
+function resetWishlistFilters() {
+  ['filter-wish-artist', 'filter-wish-album', 'filter-wish-year'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['filter-wish-source', 'filter-wish-prio'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  renderWishlist();
+}
+
+function resetTrackWishlistFilters() {
+  ['filter-tw-artist', 'filter-tw-title'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  renderTrackWishlist();
 }
 
 // Filtres locaux à l'onglet RYM (Artiste/Album/Genre/Année) — s'ajoutent à la recherche globale
@@ -11644,7 +11731,7 @@ async function cleanupLastfmDuplicates() {
     return;
   }
 
-  toast(`Nettoyage Supabase en cours… (${removedAlbums} albums, ${removedTracks} morceaux détectés)`);
+  toast(`Nettoyage en cours… (${removedAlbums} albums, ${removedTracks} morceaux détectés)`);
   try {
     // Remplacement complet : purge la table puis réinsère la version fusionnée,
     // sinon les anciennes lignes en double (autre casse) restent orphelines côté serveur.
@@ -11661,7 +11748,7 @@ async function cleanupLastfmDuplicates() {
     }
     toast(`✓ last.fm nettoyé : ${removedAlbums} doublon(s) albums, ${removedTracks} doublon(s) morceaux fusionnés`);
   } catch (e) {
-    toast('Erreur nettoyage Supabase : ' + (e.message || e), 'error');
+    toast('Erreur nettoyage : ' + (e.message || e), 'error');
   }
 }
 
@@ -11676,7 +11763,7 @@ async function cleanupLastfmDuplicates() {
 // prochaine consolidation par (artiste, titre). Seule une purge complète des tables AVANT resync
 // garantit un état propre, quelle que soit l'origine du résidu.
 async function resetLastfmCompletely() {
-  if (!confirm('Ceci va effacer TOUTES les données last.fm (albums + morceaux) côté Supabase et en local, puis repartir de zéro.\n\nÀ utiliser si des écoutes restent doublées malgré une resync classique (résidu d\'un bug déjà corrigé, ou de duplication de lignes en base).\n\nAprès la purge, relance manuellement "Sync last.fm" pour tout recharger depuis l\'API — ça peut prendre du temps selon la taille de ton historique.\n\nContinuer ?')) return;
+  if (!confirm('Ceci va effacer TOUTES les données last.fm (albums + morceaux), localement, puis repartir de zéro.\n\nÀ utiliser si des écoutes restent doublées malgré une resync classique (résidu d\'un bug déjà corrigé, ou de duplication de lignes en base).\n\nAprès la purge, relance manuellement "Sync last.fm" pour tout recharger depuis l\'API — ça peut prendre du temps selon la taille de ton historique.\n\nContinuer ?')) return;
   closeIntegrityModal();
   const status = document.getElementById('status-lastfm');
   if (status) { status.textContent = 'Purge complète last.fm en cours…'; status.className = 'status'; }
@@ -12567,7 +12654,7 @@ function _snapshotCounts(payload) {
 }
 
 async function createSnapshot(label, payload) {
-  if (!window._sb) { toast("Supabase non connecté — snapshot impossible", 'error'); return false; }
+  if (!window._sb) { toast("Stockage local non initialisé — snapshot impossible", 'error'); return false; }
   try {
     const finalPayload = payload || { _remoteFormat: false, albums, tracks, associations, rymAssociations, wishlist, trackWishlist };
     const { error } = await window._sb.from('collection_snapshots').insert({
@@ -12612,7 +12699,7 @@ async function manualSnapshot() {
 // supprime un nombre anormal de lignes côté Supabase.
 async function autoSnapshotBeforeDelete(deleteCount) {
   if (deleteCount < SNAPSHOT_AUTO_THRESHOLD) return;
-  console.warn(`[snapshot auto] ${deleteCount} suppression(s) Supabase détectée(s) — snapshot de sécurité avant purge`);
+  console.warn(`[snapshot auto] ${deleteCount} suppression(s) détectée(s) — snapshot de sécurité avant purge`);
   try {
     let remoteAlbums = [], rp = 0;
     while (true) {
@@ -12641,7 +12728,7 @@ document.getElementById('modal-snapshots').addEventListener('click', function(e)
 async function renderSnapshotsList() {
   const el = document.getElementById('snapshots-list');
   el.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px">Chargement…</div>';
-  if (!window._sb) { el.innerHTML = '<div class="empty" style="padding:24px">Supabase non connecté</div>'; return; }
+  if (!window._sb) { el.innerHTML = '<div class="empty" style="padding:24px">Stockage local non initialisé</div>'; return; }
   try {
     // IMPORTANT : ne JAMAIS sélectionner la colonne `data` ici (tout le JSON de la collection) —
     // seule `counts` (résumé léger, voir _snapshotCounts) est nécessaire pour l'affichage de la
@@ -12715,7 +12802,7 @@ async function restoreSnapshot(id) {
     repairDuplicateIds();
     invalidateCache();
     renderAlbums(); renderTracks(); updateNavBadges();
-    toast('Restauration en cours — synchronisation Supabase…');
+    toast('Restauration en cours — synchronisation…');
     await saveToSupabase();
     saveToStorage();
     closeSnapshotsModal();
@@ -12768,8 +12855,8 @@ async function renderJournal() {
   const status = document.getElementById('journal-status');
   const results = document.getElementById('journal-results');
   if (!window._sb) {
-    sel.innerHTML = '<option>Supabase non connecté</option>';
-    results.innerHTML = '<div class="empty" style="padding:24px">Le journal nécessite Supabase (les snapshots y sont stockés).</div>';
+    sel.innerHTML = '<option>Stockage local non initialisé</option>';
+    results.innerHTML = '<div class="empty" style="padding:24px">Le journal nécessite le stockage local (les snapshots y sont stockés).</div>';
     return;
   }
   sel.innerHTML = '<option>Chargement…</option>';

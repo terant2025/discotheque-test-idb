@@ -81,6 +81,7 @@
 <!-- APP_VERSION: v2026.07.13-05 — 💾 Image complète IndexedDB (export/import), demandé par Antoine en assurance contre un nettoyage agressif du cache navigateur qui effacerait IndexedDB. Distincte de exportJSON()/reimportJSON() (qui exclut volontairement musicbee_tracks/lastfm_tracks — cf. v2026.07.12-23, régénérables, fichier plus léger) : exportIndexedDBBackup() télécharge une image brute et complète de TOUTES les "tables" du shim LocalDB telles quelles (albums/tracks/associations/lastfm_data/rym_data/meta/sync_state/album_tracks/musicbee_tracks/lastfm_tracks/collection_snapshots...), en énumérant dynamiquement les clés réellement présentes dans IndexedDB plutôt qu'une liste figée en dur. importIndexedDBBackup() restaure tel quel (écrase, ne fusionne pas) puis recharge la page. Fichier volontairement plus gros et plus lent — pensé comme un usage ponctuel, pas une routine (le JSON existant reste le bon choix pour ça). Testé en Node (fake-indexeddb) : export puis restauration dans une instance LocalDB neuve (sans cache applicatif) pour confirmer que les données sont bien écrites sur le disque IndexedDB, pas seulement en mémoire. -->
 <!-- APP_VERSION: v2026.07.13-06 — 🔁 Réinitialisation des filtres + tri ascendant/descendant, demandé par Antoine. Bouton "↺" (même modèle que resetRymFilters()/resetCoversFilters()/resetCompletenessFilters() déjà existants) ajouté à Collection, Discographie, Stock, Wishlist albums et Wishlist morceaux — remet chaque champ de filtre à sa valeur par défaut (texte vide, select à sa 1ère option, y compris masquage des champs valeur des filtres de note via onNoteOpChange()) puis relance le rendu ; ne touche pas au tri (préférence d'affichage) ni aux préréglages enregistrés. Tri ascendant/descendant : bouton ▼/▲ à bascule ajouté à côté des sélecteurs de tri de Collection (sort-col) et Discographie (disco-sort) — seules vues du groupe demandé à avoir un tel sélecteur (Stock et Wishlist n'en ont pas). Implémenté comme un simple multiplicateur (_sortAscCollection/_sortAscDisco, ±1) appliqué au comparateur existant dans sortedAlbums()/discoFilteredList(), sans dupliquer la logique de tri par colonne. -->
 <!-- APP_VERSION: v2026.07.13-07 — 🐛 Correctif migration IndexedDB : statuts last.fm (albums ignorés/à écouter, morceaux likés) perdus après rechargement. Repéré par Antoine sur le dépôt de test ("je n'ai plus les albums last.fm ignorés depuis la bascule locale"). Root cause : migrateSupabaseToIndexedDB() s'appuyait sur saveToSupabase() pour tout persister dans IndexedDB en fin de migration — mais lastfm_status/lastfm_track_status/lastfm_loved (clés de la table meta) ne sont PAS couvertes par le batch de saveToSupabase(), elles ne sont écrites que par leurs fonctions dédiées (setLastfmStatus() et équivalents), jamais par le batch général. loadFromSupabase()/loadLastfmFromSupabase() les avaient bien chargées en mémoire depuis le vrai Supabase pendant la migration (d'où leur présence correcte le temps de cette 1ère session), mais sans écriture explicite elles ne survivaient pas au rechargement suivant. Corrigé : ces 3 clés sont désormais upsert explicitement dans le shim juste après la migration, avant l'appel à saveToSupabase(). ⚠️ Toute migration effectuée avec une version antérieure à celle-ci doit être refaite (vider IndexedDB + localStorage.removeItem('discotheque_idb_migrated') puis recharger) pour récupérer ces statuts. -->
+<!-- APP_VERSION: v2026.07.13-08 — 🧹 Nettoyage complet des messages/libellés "Supabase" devenus trompeurs, demandé par Antoine qui fait désormais du dépôt de test son instance principale. Passage exhaustif (pas juste les 2 messages déjà corrigés en -04) : messages console (sauvegarde/chargement/nettoyage), textes de progression (import XML, sync morceaux, enrichissement MBID ListenBrainz — le fameux "flush Supabase..." vu dans les logs), bouton "Snapshots Supabase" → "Journal / Snapshots", modale Journal (titre + texte + garde-fous "Supabase non connecté" → "Stockage local non initialisé"), confirmation de "☢️ Reset complet last.fm" (n'écrit plus que du local). Laissés inchangés à dessein : les commentaires internes/changelog (historique fidèle à ce qui était vrai au moment où ils ont été écrits) et les messages décrivant une vraie action ponctuelle sur le vrai Supabase (migration initiale, reconnexion manuelle via la clé). Purement cosmétique, aucun changement de comportement. -->
 
 
 
@@ -236,7 +237,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-07</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-08</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1269,8 +1270,8 @@
           <button class="btn btn-danger" onclick="clearAll()">🗑 Vider la collection</button>
           <button class="btn" onclick="if(confirm('Remplacer la collection par les données de démonstration ?')){loadDemo();saveToStorage();renderAlbums();renderTracks();updateNavBadges();toast('Données de démo chargées');}">↺ Charger démo</button>
           <button class="btn btn-accent" onclick="openIntegrityModal()">🩺 Vérifier l'intégrité</button>
-          <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Snapshots Supabase</button>
-          <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer Supabase</button>
+          <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Journal / Snapshots</button>
+          <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer la clé Supabase (migration)</button>
         </div>
         <p style="margin-top:10px">Image complète IndexedDB (assurance) : contient TOUT tel quel — y compris les données volumineuses régénérables exclues du JSON ci-dessus (morceaux last.fm, données MusicBee brutes, tracklists, snapshots du Journal). Fichier volontairement gros et lent à produire : à utiliser en cas de nettoyage agressif du cache navigateur, pas comme sauvegarde de routine.</p>
         <div class="row-flex">
@@ -2123,8 +2124,8 @@
 <!-- Modal snapshots Supabase -->
 <div class="modal-overlay" id="modal-snapshots">
   <div class="modal" style="width:720px;max-width:92vw">
-    <h2>🕐 Snapshots Supabase</h2>
-    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Sauvegardes complètes de la collection (albums, morceaux isolés, wishlist, associations), stockées côté Supabase — disponibles même après un rechargement ou depuis un autre appareil. Un snapshot automatique est aussi pris juste avant toute suppression massive d'albums lors d'une synchronisation.</p>
+    <h2>🕐 Journal / Snapshots</h2>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Sauvegardes complètes de la collection (albums, morceaux isolés, wishlist, associations), stockées dans IndexedDB (localement). Un snapshot automatique est aussi pris juste avant toute suppression massive d'albums lors d'une synchronisation.</p>
     <div id="snapshots-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px"></div>
     <div class="modal-footer">
       <button class="btn" onclick="manualSnapshot().then(renderSnapshotsList)">📸 Nouveau snapshot</button>
@@ -2142,7 +2143,7 @@
       <button class="btn btn-sm" onclick="closeIntegrityModal();runDeduplication()">🔧 Fusionner les doublons</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openDupFinderModal()">🔍 Doublons potentiels</button>
       <button class="btn btn-sm" onclick="cleanupLastfmDuplicates()">🧹 Doublons last.fm</button>
-      <button class="btn btn-sm btn-danger" onclick="resetLastfmCompletely()" title="Efface tout (Supabase + local) et repart de zéro depuis l'API last.fm — pour des écoutes qui restent doublées malgré une resync classique">☢️ Reset complet last.fm</button>
+      <button class="btn btn-sm btn-danger" onclick="resetLastfmCompletely()" title="Efface tout (local, IndexedDB) et repart de zéro depuis l'API last.fm — pour des écoutes qui restent doublées malgré une resync classique">☢️ Reset complet last.fm</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();nav('import');switchImportTab('assoc');document.getElementById('filter-assoc-type').value='broken';renderAssocReview()">🔗 Associations introuvables</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openGenreCleanupModal()">🧬 Nettoyage des genres</button>
       <button class="btn btn-sm" onclick="closeIntegrityModal();openArtistCleanupModal()">🧬 Nettoyage des artistes</button>
