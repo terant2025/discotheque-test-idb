@@ -5877,7 +5877,7 @@ async function startTrackSync() {
 
     if (!_trackSyncAbort) {
       // Flush final
-      progressLabel.textContent = 'Flush final vers Supabase…';
+      progressLabel.textContent = 'Flush final…';
       await flushTrackCountsToSupabase();
       localStorage.removeItem(TRACK_CP_KEY);
       const nT = Object.keys(_lastfmTrackCounts).length;
@@ -6416,7 +6416,7 @@ async function flushTrackCountsToSupabase() {
         .upsert(rows.slice(i, i + 400), { onConflict: 'artist,track,album' });
       if (error) console.warn('flush chunk error:', error);
     }
-    console.log(`lastfm_tracks : ${rows.length} morceaux sauvegardés dans Supabase`);
+    console.log(`lastfm_tracks : ${rows.length} morceaux sauvegardés`);
   } catch(e) { console.warn('Erreur flush lastfm_tracks:', e); }
 }
 
@@ -6435,7 +6435,7 @@ async function flushAlbumCountsToSupabase() {
         .upsert(rows.slice(i, i + 400), { onConflict: 'artist,album' });
       if (error) console.warn('flush chunk error (albums):', error);
     }
-    console.log(`lastfm_data : ${rows.length} albums sauvegardés dans Supabase`);
+    console.log(`lastfm_data : ${rows.length} albums sauvegardés`);
   } catch(e) { console.warn('Erreur flush lastfm_data:', e); }
 }
 
@@ -6576,7 +6576,7 @@ async function fetchLastfmPage(page) {
     btnMore.style.display = 'inline-flex';
   } else {
     // Flush final des albums + morceaux dans Supabase
-    progressLabel.textContent = 'Sauvegarde des albums et morceaux dans Supabase…';
+    progressLabel.textContent = 'Sauvegarde des albums et morceaux…';
     await flushTrackCountsToSupabase();
     await flushAlbumCountsToSupabase();
     clearLastfmCheckpoint();
@@ -12612,7 +12612,7 @@ async function renderSnapshotsList() {
 }
 
 async function restoreSnapshot(id) {
-  if (!confirm("Restaurer ce snapshot va REMPLACER la collection actuelle par son contenu, puis resynchroniser vers Supabase.\n\nUn snapshot de l'état actuel sera créé automatiquement avant, par sécurité.\n\nContinuer ?")) return;
+  if (!confirm("Restaurer ce snapshot va REMPLACER la collection actuelle par son contenu, puis resynchroniser.\n\nUn snapshot de l'état actuel sera créé automatiquement avant, par sécurité.\n\nContinuer ?")) return;
   // Bug corrigé v2026.07.10-20 : updateNavBadges() (appelé juste après la restauration, quelques
   // lignes plus bas) déclenche pruneWishlistOwned() de façon DÉBOUNCÉE (80ms, voir updateNavBadges).
   // Comme saveToSupabase() ci-dessous prend largement plus de 80ms (plusieurs allers-retours
