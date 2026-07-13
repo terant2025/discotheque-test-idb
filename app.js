@@ -15443,6 +15443,68 @@ function renderMissingIds() {
 let _linkIdTarget = null; // { type:'album'|'track', id, artist, title, field }
 let _linkIdResults = [];
 
+// Auto-match des MBID "évidents" pour les morceaux isolés (v2026.07.13-12, demandé par
+// Antoine : "beaucoup de morceaux isolés sans MBID alors que le rapprochement semble facile").
+// Root cause du manque : l'enrichissement MBID automatique existant (syncListenBrainz(), plus
+// haut) n'alimente que _lastfmTrackCounts (le cache des écoutes last.fm/LB) — jamais les
+// morceaux POSSÉDÉS eux-mêmes (tableau `tracks`) — d'où la nécessité de passer par le bouton
+// manuel "🔍 MusicBrainz" un par un. Ici : recherche automatique par artiste+titre (même
+// endpoint public que openLinkIdModal ci-dessous), mais n'applique QUE les correspondances très
+// confiantes (score MusicBrainz ≥ 95 ET artiste ET titre strictement identiques une fois
+// normalisés) — un cas ambigu (plusieurs artistes homonymes, titre approximatif) est laissé de
+// côté pour la revue manuelle existante, jamais un mauvais MBID appliqué à l'aveugle. Pacing
+// ~1,1s entre requêtes (cf. limite MusicBrainz déjà documentée ailleurs dans ce fichier).
+let _autoMatchMbidRunning = false;
+let _autoMatchMbidAbort = false;
+async function autoMatchMissingTrackMbids() {
+  const btn = document.getElementById('btn-automatch-mbid');
+  const statusEl = document.getElementById('missingids-automatch-status');
+  if (_autoMatchMbidRunning) {
+    _autoMatchMbidAbort = true;
+    if (btn) btn.textContent = '⏳ Arrêt en cours…';
+    return;
+  }
+  const list = tracksWithoutMbid();
+  if (!list.length) { toast('Aucun morceau isolé sans MBID.'); return; }
+  const etaMin = Math.ceil(list.length * 1.1 / 60);
+  if (!confirm(`Chercher automatiquement un MBID pour les ${list.length} morceau(x) isolé(s) sans MBID ?\n\nSeules les correspondances très confiantes (score MusicBrainz élevé, artiste ET titre identiques) seront appliquées automatiquement — les cas ambigus resteront pour vérification manuelle via "🔍 MusicBrainz".\n\nDurée estimée : ~${etaMin} min (limite MusicBrainz : ~1 requête/seconde). Peut être mis en pause à tout moment.\n\nContinuer ?`)) return;
+
+  _autoMatchMbidRunning = true;
+  _autoMatchMbidAbort = false;
+  if (btn) btn.textContent = '⏸ Pause auto-match';
+  let matched = 0, checked = 0;
+  const normTitle = s => normalizeKey('', s || '').replace('|||', '');
+
+  for (const t of list) {
+    if (_autoMatchMbidAbort) break;
+    checked++;
+    if (statusEl) statusEl.textContent = `${checked}/${list.length} vérifiés — ${matched} MBID trouvé(s) automatiquement…`;
+    try {
+      const q = `artist:"${t.artist}" AND recording:"${t.title}"`;
+      const res = await fetch(`https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(q)}&fmt=json&limit=5`);
+      if (res.ok) {
+        const data = await res.json();
+        const best = (data.recordings || [])[0];
+        if (best && (best.score || 0) >= 95) {
+          const bestArtist = (best['artist-credit'] || []).map(c => c.name).join(', ');
+          const artistOk = [...artistVariants(bestArtist)].some(v => artistVariants(t.artist).has(v));
+          const titleOk = normTitle(best.title) === normTitle(t.title);
+          if (artistOk && titleOk) { t.mb_recording_id = best.id; matched++; }
+        }
+      }
+    } catch(e) { /* réseau — ce morceau reste pour la revue manuelle, on continue la liste */ }
+    await new Promise(r => setTimeout(r, 1100)); // pacing MusicBrainz
+  }
+
+  _autoMatchMbidRunning = false;
+  if (btn) btn.textContent = '🪄 Auto-matcher les évidents';
+  if (matched) { invalidateCache(); saveToStorage(); }
+  renderMissingIds();
+  const abortedNote = _autoMatchMbidAbort ? ' (interrompu par l\u2019utilisateur)' : '';
+  if (statusEl) statusEl.textContent = `Terminé${abortedNote} : ${matched}/${checked} MBID trouvés automatiquement.`;
+  toast(`🪄 Auto-match : ${matched}/${checked} MBID trouvés automatiquement — le reste nécessite une vérification manuelle`);
+}
+
 async function openLinkIdModal(type, idSid, field) {
   const id = unsid(idSid);
   const entity = type === 'album' ? albums.find(a => a.id === id) : tracks.find(t => t.id === id);
