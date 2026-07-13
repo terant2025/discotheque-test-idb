@@ -11752,9 +11752,22 @@ async function initApp() {
 
   const loaded = await loadLocalCollection();
   if (!loaded) {
-    // IndexedDB vide (tout premier lancement, ou navigateur/appareil jamais migré) — charger
-    // la démo et proposer la migration Supabase si Antoine veut rapatrier une collection
-    // existante depuis un autre appareil.
+    // IndexedDB vide. Deux cas possibles :
+    // (a) tout premier lancement / navigateur jamais migré → démo + écran de config.
+    // (b) IndexedDB a été vidée manuellement (ex: tests, "Effacer les données du site") alors
+    //     que LS_IDB_MIGRATED était déjà posé et qu'une clé Supabase est connue → dans ce cas,
+    //     mieux vaut re-migrer automatiquement que de charger silencieusement une collection
+    //     vide en faisant croire que la vraie collection a disparu (bug repéré en session par
+    //     Antoine sur le dépôt de test, v2026.07.13-02).
+    if (savedCfg === 'supabase' && savedKey) {
+      console.warn('IndexedDB vide alors qu\'une migration avait déjà eu lieu — re-migration automatique depuis Supabase.');
+      try {
+        await migrateSupabaseToIndexedDB(savedKey);
+        return;
+      } catch(e) {
+        console.warn('Re-migration automatique échouée :', e);
+      }
+    }
     loadDemo();
     saveToStorage();
     _dataReady = true;
