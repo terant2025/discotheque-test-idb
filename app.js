@@ -595,6 +595,22 @@ async function loadLocalCollection() {
   return loaded;
 }
 
+// Récupère TOUTES les lignes d'une table (pagination par blocs de 1000 — PostgREST plafonne
+// chaque requête à 1000 lignes par défaut). Même motif exact que loadAlbumTracks()/
+// loadMusicBeeTracks() plus bas dans ce fichier.
+async function fetchAllRows(client, table) {
+  let all = [], page = 0;
+  while (true) {
+    const { data, error } = await client.from(table).select('*').range(page * 1000, (page + 1) * 1000 - 1);
+    if (error) { console.warn(`fetchAllRows(${table}):`, error); break; }
+    if (!data || !data.length) break;
+    all = all.concat(data);
+    if (data.length < 1000) break;
+    page++;
+  }
+  return all;
+}
+
 // Migration ponctuelle (1 seule fois par navigateur, cf. flag LS_IDB_MIGRATED) : rapatrie tout
 // depuis le vrai Supabase (ancienne source de vérité) vers IndexedDB. N'utilise le client
 // Supabase RÉEL (supabase.createClient) que le temps de cette fonction, en repointant
@@ -602,9 +618,10 @@ async function loadLocalCollection() {
 // loadLastfmFromSupabase(), loadAlbumTracks(), loadMusicBeeTracks()) fonctionne alors sans
 // modification, exactement comme avant cette migration. album_tracks/musicbee_tracks ne
 // peuplent que des caches DÉRIVÉS en mémoire (albumTracksCache, window._mbTrackKeys...) — les
-// lignes brutes sont donc re-récupérées une fois de plus ci-dessous pour amorcer les tables
-// IndexedDB correspondantes (sans quoi elles resteraient vides et ces fonctionnalités
-// disparaîtraient au prochain rechargement de page).
+// lignes brutes sont donc re-récupérées une fois de plus ci-dessous (paginées, cf.
+// fetchAllRows — un select('*') simple serait plafonné à 1000 lignes par Supabase) pour
+// amorcer les tables IndexedDB correspondantes (sans quoi elles resteraient tronquées à 1000
+// lignes et ces fonctionnalités seraient incomplètes dès le prochain rechargement de page).
 async function migrateSupabaseToIndexedDB(anonKey) {
   toast('Migration Supabase → IndexedDB en cours…');
   const localSb = window._sb; // le shim déjà initialisé par initLocalDB()
@@ -615,11 +632,11 @@ async function migrateSupabaseToIndexedDB(anonKey) {
     await loadLastfmFromSupabase();
     await loadAlbumTracks();
     await loadMusicBeeTracks();
-    const { data: rawAlbumTracks } = await realSb.from('album_tracks').select('*');
-    const { data: rawMbTracks } = await realSb.from('musicbee_tracks').select('*');
+    const rawAlbumTracks = await fetchAllRows(realSb, 'album_tracks');
+    const rawMbTracks = await fetchAllRows(realSb, 'musicbee_tracks');
     window._sb = localSb; // retour au shim IndexedDB pour tout ce qui suit
-    if (rawAlbumTracks?.length) await window._sb.from('album_tracks').insert(rawAlbumTracks);
-    if (rawMbTracks?.length) await window._sb.from('musicbee_tracks').insert(rawMbTracks);
+    if (rawAlbumTracks.length) await window._sb.from('album_tracks').insert(rawAlbumTracks);
+    if (rawMbTracks.length) await window._sb.from('musicbee_tracks').insert(rawMbTracks);
     if (albums.length > 0) await saveToSupabase(); // écrit albums/tracks/wishlist/etc. dans IndexedDB
     localStorage.setItem(LS_IDB_MIGRATED, '1');
     _dataReady = true;
