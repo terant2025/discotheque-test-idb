@@ -93,6 +93,7 @@
 <!-- APP_VERSION: v2026.07.13-17 — 📅 Date d'ajout affichée dans la Wishlist, demandé par Antoine. Le champ addedAt existait déjà (horodaté à chaque ajout, tous chemins confondus — manuel, last.fm, RYM, stock, discographie MB) mais n'était jamais affiché ni exploité nulle part. Ajouté : colonne "Ajouté le" dans Wishlist albums et Wishlist morceaux (date courte + horodatage complet au survol), colonne dans l'export CSV Wishlist, et tri secondaire par date d'ajout (plus récent d'abord) à priorité égale dans Wishlist morceaux. -->
 <!-- APP_VERSION: v2026.07.13-18 — ⭐ Note MB ajoutée à l'onglet "Basse qualité" (Titres), demandé par Antoine. Colonne "Note MB" (étoiles) affichée dans le tableau et incluse dans l'export CSV (note_mb) — rating pour les pistes d'albums (via albumTracksCache), note pour les morceaux isolés (deux champs différents mais même échelle 0-5, déjà utilisés ainsi partout ailleurs dans le fichier). -->
 <!-- APP_VERSION: v2026.07.13-19 — ☑️ Filtre "Uniquement les morceaux notés" dans l'onglet "Basse qualité" (Titres), demandé par Antoine. Case à cocher au-dessus du tableau, filtre sur note > 0 (le champ ajouté en -18) — respecté aussi par l'export CSV, pour rester cohérent avec ce qui est affiché à l'écran. -->
+<!-- APP_VERSION: v2026.07.13-20 — ☑️ Filtre "Uniquement les morceaux isolés" dans l'onglet "Basse qualité" (Titres), demandé par Antoine ("un filtre sur les morceaux isolés dans top titres" — interprété comme continuant sur cet onglet, puisque "Titres" y mélange pistes d'albums et morceaux isolés depuis v2026.07.13-16 ; à ajuster si ce n'était pas le bon endroit). Chaque ligne de computeLowQualityTracks() porte désormais un flag `isolated` (true pour les morceaux du tableau `tracks`, false pour les pistes d'albums via albumTracksCache) ; nouvelle case à cocher filtrant dessus, combinable avec "Uniquement les morceaux notés" existante, respectée aussi par l'export CSV. -->
 
 
 
@@ -231,7 +232,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-19</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-20</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1507,6 +1508,9 @@
           <button class="btn btn-sm" onclick="exportLowQualityTracksCSV()">⬇ Export CSV</button>
           <label style="font-size:12px;color:var(--text3);display:flex;align-items:center;gap:5px;cursor:pointer">
             <input type="checkbox" id="lq-tracks-only-noted" onchange="renderLowQuality()"> Uniquement les morceaux notés
+          </label>
+          <label style="font-size:12px;color:var(--text3);display:flex;align-items:center;gap:5px;cursor:pointer">
+            <input type="checkbox" id="lq-tracks-only-isolated" onchange="renderLowQuality()"> Uniquement les morceaux isolés
           </label>
         </h3>
         <div class="table-wrap">

@@ -12891,11 +12891,11 @@ function computeLowQualityTracks() {
   const result = [];
   albums.forEach(a => {
     (albumTracksCache[a.id] || []).forEach(t => {
-      if (t.bitrate && t.bitrate < 320) result.push({ artist: a.artist, album: a.album, title: t.title, bitrate: t.bitrate, note: t.rating || 0 });
+      if (t.bitrate && t.bitrate < 320) result.push({ artist: a.artist, album: a.album, title: t.title, bitrate: t.bitrate, note: t.rating || 0, isolated: false });
     });
   });
   tracks.forEach(t => {
-    if (t.bitrate && t.bitrate < 320) result.push({ artist: t.artist, album: t.album || '', title: t.title, bitrate: t.bitrate, note: t.note || 0 });
+    if (t.bitrate && t.bitrate < 320) result.push({ artist: t.artist, album: t.album || '', title: t.title, bitrate: t.bitrate, note: t.note || 0, isolated: true });
   });
   return result.sort((a, b) => a.bitrate - b.bitrate);
 }
@@ -12919,8 +12919,9 @@ function exportLowQualityAlbumsCSV() {
 
 function exportLowQualityTracksCSV() {
   const onlyNoted = document.getElementById('lq-tracks-only-noted')?.checked;
+  const onlyIsolated = document.getElementById('lq-tracks-only-isolated')?.checked;
   const rows = [['artiste', 'album', 'titre', 'bitrate_kbps', 'note_mb']];
-  computeLowQualityTracks().filter(t => !onlyNoted || t.note > 0).forEach(t => rows.push([t.artist, t.album, t.title, t.bitrate, t.note || '']));
+  computeLowQualityTracks().filter(t => (!onlyNoted || t.note > 0) && (!onlyIsolated || t.isolated)).forEach(t => rows.push([t.artist, t.album, t.title, t.bitrate, t.note || '']));
   _csvDownload('discotheque_basse_qualite_titres.csv', rows);
   toast(`Export CSV téléchargé ✓ (${rows.length - 1} titre${rows.length - 1 > 1 ? 's' : ''})`);
 }
@@ -12931,7 +12932,8 @@ function renderLowQuality() {
   if (!albumsTbody || !tracksTbody) return;
   const lowAlbums = computeLowQualityAlbums();
   const onlyNoted = document.getElementById('lq-tracks-only-noted')?.checked;
-  const lowTracks = computeLowQualityTracks().filter(t => !onlyNoted || t.note > 0);
+  const onlyIsolated = document.getElementById('lq-tracks-only-isolated')?.checked;
+  const lowTracks = computeLowQualityTracks().filter(t => (!onlyNoted || t.note > 0) && (!onlyIsolated || t.isolated));
   const albumsCounterEl = document.getElementById('lowquality-albums-counter');
   if (albumsCounterEl) albumsCounterEl.textContent = `${lowAlbums.length} album${lowAlbums.length > 1 ? 's' : ''}`;
   const tracksCounterEl = document.getElementById('lowquality-tracks-counter');
