@@ -8360,17 +8360,18 @@ function renderTrackWishlist() {
     (!q||`${w.artist} ${w.title}`.toLowerCase().includes(q))
     &&(!af||w.artist.toLowerCase().includes(af))
     &&(!tf||w.title.toLowerCase().includes(tf))
-  ).sort((a,b)=>({high:0,mid:1,low:2}[a.prio]||1)-({high:0,mid:1,low:2}[b.prio]||1));
+  ).sort((a,b)=>({high:0,mid:1,low:2}[a.prio]||1)-({high:0,mid:1,low:2}[b.prio]||1) || (b.addedAt||0)-(a.addedAt||0));
   const ctr=document.getElementById('tw-counter'); if(ctr) ctr.textContent=list.length+' morceaux';
   const badge=document.getElementById('nav-track-wish-count'); if(badge) badge.textContent=trackWishlist.length;
   const tbody=document.getElementById('tw-tbody');
   const prioL={high:'🔴 Haute',mid:'🟡 Moyenne',low:'🟢 Basse'};
-  if (!list.length) { tbody.innerHTML='<tr><td colspan="5"><div class="empty"><div class="empty-icon">🎯</div>Wishlist morceaux vide.</div></td></tr>'; return; }
+  if (!list.length) { tbody.innerHTML='<tr><td colspan="6"><div class="empty"><div class="empty-icon">🎯</div>Wishlist morceaux vide.</div></td></tr>'; return; }
   tbody.innerHTML=list.map(w=>`<tr>
     <td style="font-weight:500">${esc(w.title)}</td>
     <td style="font-size:12px;color:var(--text2)">${artistLink(w.artist)}</td>
     <td style="font-size:11px;color:var(--text3)">${esc(w.album||'–')}</td>
     <td style="font-size:12px">${prioL[w.prio]||w.prio}</td>
+    <td style="font-size:11px;color:var(--text3)" title="${w.addedAt ? new Date(w.addedAt).toLocaleString('fr-FR') : ''}">${w.addedAt ? new Date(w.addedAt).toLocaleDateString('fr-FR') : '–'}</td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm" onclick="openTrackWishModal(${w.id})">✎</button>
       <button class="btn btn-sm btn-danger" onclick="deleteTrackWish(${w.id})">✕</button>
@@ -8618,13 +8619,14 @@ function exportWishlistCSV() {
   const list = wishFilteredList();
   const prioLabel = { high: 'Haute', mid: 'Moyenne', low: 'Basse' };
   const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', discography: 'Discographie MB', manual: 'Manuel' };
-  const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Notes']];
+  const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Notes','Ajouté le']];
   list.forEach(w => {
     const plays = wishPlays(w) || '';
     const owned = wishOwnedMatch(w);
     const rymEntry = wishRymEntry(w);
     rows.push([w.artist, w.album, w.year||'', srcLabel[w.source]||w.source,
-      prioLabel[w.prio]||w.prio, plays, owned?.note||'', owned?.discogsRating||'', rymEntry?.rating||'', w.notes||'']);
+      prioLabel[w.prio]||w.prio, plays, owned?.note||'', owned?.discogsRating||'', rymEntry?.rating||'', w.notes||'',
+      w.addedAt ? new Date(w.addedAt).toLocaleDateString('fr-FR') : '']);
   });
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8' });
@@ -8754,7 +8756,7 @@ function renderWishlist() {
 
   const tbody = document.getElementById('wish-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="empty-icon">🎯</div>' +
+    tbody.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="empty-icon">🎯</div>' +
       (wishlist.length ? 'Aucun résultat avec ces filtres.' : 'La wishlist est vide. Ajoutez des albums depuis last.fm, RYM ou le stock.') +
       '</div></td></tr>';
     renderWishBulkBar();
@@ -8784,6 +8786,7 @@ function renderWishlist() {
     <td class="mono">${owned?.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${owned.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
     <td class="mono">${owned?.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(owned.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
     <td class="mono" style="color:var(--amber)">${rymEntry?.rating ? rymEntry.rating.toFixed(2) + '★' : '–'}</td>
+    <td style="font-size:11px;color:var(--text3)" title="${w.addedAt ? new Date(w.addedAt).toLocaleString('fr-FR') : ''}">${w.addedAt ? new Date(w.addedAt).toLocaleDateString('fr-FR') : '–'}</td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm" onclick="openWishModal(${w.id})" title="Modifier">✎</button>
       <button class="btn btn-sm btn-danger" onclick="deleteWish(${w.id})" title="Supprimer">✕</button>
@@ -12879,9 +12882,48 @@ function computeLowQualityAlbums() {
   });
   return result.sort((x, y) => x.worst - y.worst);
 }
+// Couvre maintenant TOUTES les pistes à bitrate connu sous 320 — les pistes d'albums (via
+// albumTracksCache, comme pour computeLowQualityAlbums() ci-dessus) ET les morceaux isolés —
+// pas seulement ces derniers comme avant v2026.07.13-16. Nécessaire pour un export CSV
+// artiste/album/titre réellement exploitable (demandé par Antoine : "c'est pas super
+// exploitable"), plutôt qu'une liste de morceaux isolés sans les pistes d'album.
 function computeLowQualityTracks() {
-  return tracks.filter(t => t.bitrate && t.bitrate < 320).sort((a, b) => a.bitrate - b.bitrate);
+  const result = [];
+  albums.forEach(a => {
+    (albumTracksCache[a.id] || []).forEach(t => {
+      if (t.bitrate && t.bitrate < 320) result.push({ artist: a.artist, album: a.album, title: t.title, bitrate: t.bitrate });
+    });
+  });
+  tracks.forEach(t => {
+    if (t.bitrate && t.bitrate < 320) result.push({ artist: t.artist, album: t.album || '', title: t.title, bitrate: t.bitrate });
+  });
+  return result.sort((a, b) => a.bitrate - b.bitrate);
 }
+
+// Bascule interne Albums/Titres (même principe que le bandeau Vue Artiste/Artistes similaires) —
+// demandé par Antoine plutôt qu'une seule page combinée jugée peu exploitable.
+function switchLowQualityTab(tab) {
+  const showAlbums = tab === 'albums';
+  document.getElementById('lq-panel-albums').style.display = showAlbums ? '' : 'none';
+  document.getElementById('lq-panel-tracks').style.display = showAlbums ? 'none' : '';
+  document.getElementById('lq-tab-btn-albums').classList.toggle('active', showAlbums);
+  document.getElementById('lq-tab-btn-tracks').classList.toggle('active', !showAlbums);
+}
+
+function exportLowQualityAlbumsCSV() {
+  const rows = [['artiste', 'album', 'pire_bitrate_kbps', 'pistes_basses', 'pistes_connues']];
+  computeLowQualityAlbums().forEach(r => rows.push([r.album.artist, r.album.album, r.worst, r.lowCount, r.totalKnown]));
+  _csvDownload('discotheque_basse_qualite_albums.csv', rows);
+  toast(`Export CSV téléchargé ✓ (${rows.length - 1} album${rows.length - 1 > 1 ? 's' : ''})`);
+}
+
+function exportLowQualityTracksCSV() {
+  const rows = [['artiste', 'album', 'titre', 'bitrate_kbps']];
+  computeLowQualityTracks().forEach(t => rows.push([t.artist, t.album, t.title, t.bitrate]));
+  _csvDownload('discotheque_basse_qualite_titres.csv', rows);
+  toast(`Export CSV téléchargé ✓ (${rows.length - 1} titre${rows.length - 1 > 1 ? 's' : ''})`);
+}
+
 function renderLowQuality() {
   const albumsTbody = document.getElementById('lowquality-albums-tbody');
   const tracksTbody = document.getElementById('lowquality-tracks-tbody');
@@ -12891,7 +12933,7 @@ function renderLowQuality() {
   const albumsCounterEl = document.getElementById('lowquality-albums-counter');
   if (albumsCounterEl) albumsCounterEl.textContent = `${lowAlbums.length} album${lowAlbums.length > 1 ? 's' : ''}`;
   const tracksCounterEl = document.getElementById('lowquality-tracks-counter');
-  if (tracksCounterEl) tracksCounterEl.textContent = `${lowTracks.length} morceau${lowTracks.length > 1 ? 'x' : ''}`;
+  if (tracksCounterEl) tracksCounterEl.textContent = `${lowTracks.length} titre${lowTracks.length > 1 ? 's' : ''}`;
   const badge = document.getElementById('nav-lowquality-count');
   if (badge) badge.textContent = lowAlbums.length + lowTracks.length;
 
@@ -12905,9 +12947,11 @@ function renderLowQuality() {
 
   tracksTbody.innerHTML = lowTracks.length ? lowTracks.map(t => `
     <tr>
-      <td><div style="font-weight:500">${esc(t.title)}</div><div class="sub" style="font-size:11px">${artistLink(t.artist)}</div></td>
+      <td>${artistLink(t.artist)}</td>
+      <td style="color:var(--text3)">${esc(t.album || '–')}</td>
+      <td style="font-weight:500">${esc(t.title)}</td>
       <td class="mono" style="color:var(--text2)">${t.bitrate}k</td>
-    </tr>`).join('') : '<tr><td colspan="2" class="empty" style="padding:20px;text-align:center">Aucun morceau isolé avec un bitrate connu sous 320 kbps 🎉</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="4" class="empty" style="padding:20px;text-align:center">Aucun titre avec un bitrate connu sous 320 kbps 🎉</td></tr>';
 }
 
 async function renderJournal() {

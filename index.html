@@ -90,6 +90,7 @@
 <!-- APP_VERSION: v2026.07.13-14 — 🐛 3 correctifs Insights repérés par Antoine. (1) "Écoutes ce même jour, les années passées" affichait parfois le morceau EN COURS D'ÉCOUTE dans chaque année passée — quirk connu de l'API last.fm : user.getrecenttracks inclut parfois le "now playing" en tête de liste indépendamment du filtre from/to demandé ; filtré désormais via l'absence de date.uts / @attr.nowplaying==='true' (un vrai scrobble passé a toujours un timestamp). (2) Graphique "Provenance des données" jugé peu clair : chaque ligne n'affichait que 4 nombres bruts séparés par un point médian discret ("0·6·2509·13"), facile à mal lire comme des tirets/nombres concaténés — icônes de la légende (🔒🔄📥∅) répétées sur chaque ligne pour rendre chaque nombre auto-explicatif. (3) "Various Artists" (compilations) écrasait le Top 10 artistes par nombre d'albums possédés (216 albums, loin devant tout le monde) — exclu des deux classements Top 10 artistes (possédés + écoutes last.fm), ce n'est pas un vrai artiste. -->
 <!-- APP_VERSION: v2026.07.13-15 — 🔉 Nouvel onglet "Basse qualité" dans Import/Export, demandé par Antoine : liste les albums et morceaux isolés dont MusicBee connaît le bitrate et où celui-ci est strictement inférieur à 320 kbps. N'affiche que ce qui a une valeur de bitrate réelle (t.bitrate, déjà présent via l'import XML) — un morceau sans info de bitrate connue (FLAC exclu naturellement, bitrate bien plus élevé ; ou tag manquant) n'apparaît jamais, faute de donnée pour juger. Pour un album : "pire piste" = bitrate le plus bas parmi ses pistes connues (via albumTracksCache, déjà utilisé ailleurs pour les tracklists), n'apparaît que si cette pire piste est sous 320. Même mécanisme switchImportTab() que les autres sous-onglets, badge de comptage mis à jour à la fois par updateNavBadges() et à l'ouverture de l'onglet. -->
 <!-- APP_VERSION: v2026.07.13-16 — 🔉 Onglet "Basse qualité" restructuré (2 sous-menus + export CSV), demandé par Antoine ("c'est pas super exploitable"). Page combinée Albums+Morceaux remplacée par une bascule interne "💿 Albums" / "🎧 Titres" (même principe que le bandeau Vue Artiste/Artistes similaires). Chacun a son bouton "⬇ Export CSV" (via _csvDownload(), déjà existant) : Albums → artiste/album/pire_bitrate_kbps/pistes_basses/pistes_connues ; Titres → artiste/album/titre/bitrate_kbps. "Titres" couvre désormais TOUTES les pistes à bitrate connu sous 320 (pistes d'albums via albumTracksCache ET morceaux isolés), pas seulement les morceaux isolés comme dans la version précédente — nécessaire pour un export réellement exploitable plutôt qu'une liste partielle. -->
+<!-- APP_VERSION: v2026.07.13-17 — 📅 Date d'ajout affichée dans la Wishlist, demandé par Antoine. Le champ addedAt existait déjà (horodaté à chaque ajout, tous chemins confondus — manuel, last.fm, RYM, stock, discographie MB) mais n'était jamais affiché ni exploité nulle part. Ajouté : colonne "Ajouté le" dans Wishlist albums et Wishlist morceaux (date courte + horodatage complet au survol), colonne dans l'export CSV Wishlist, et tri secondaire par date d'ajout (plus récent d'abord) à priorité égale dans Wishlist morceaux. -->
 
 
 
@@ -228,7 +229,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-16</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-17</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -903,6 +904,7 @@
               <th>Note MB</th>
               <th>Note DC</th>
               <th>Note RYM</th>
+              <th style="width:90px">Ajouté le</th>
               <th style="width:120px"></th>
             </tr>
           </thead>
@@ -1118,7 +1120,7 @@
         </div>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Priorité</th><th style="width:80px"></th></tr></thead>
+        <thead><tr><th>Titre</th><th>Artiste</th><th>Album</th><th>Priorité</th><th style="width:90px">Ajouté le</th><th style="width:80px"></th></tr></thead>
         <tbody id="tw-tbody"></tbody>
       </table></div>
     </div>
