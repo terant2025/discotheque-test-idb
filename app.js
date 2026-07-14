@@ -12918,8 +12918,9 @@ function exportLowQualityAlbumsCSV() {
 }
 
 function exportLowQualityTracksCSV() {
+  const onlyNoted = document.getElementById('lq-tracks-only-noted')?.checked;
   const rows = [['artiste', 'album', 'titre', 'bitrate_kbps', 'note_mb']];
-  computeLowQualityTracks().forEach(t => rows.push([t.artist, t.album, t.title, t.bitrate, t.note || '']));
+  computeLowQualityTracks().filter(t => !onlyNoted || t.note > 0).forEach(t => rows.push([t.artist, t.album, t.title, t.bitrate, t.note || '']));
   _csvDownload('discotheque_basse_qualite_titres.csv', rows);
   toast(`Export CSV téléchargé ✓ (${rows.length - 1} titre${rows.length - 1 > 1 ? 's' : ''})`);
 }
@@ -12929,7 +12930,8 @@ function renderLowQuality() {
   const tracksTbody = document.getElementById('lowquality-tracks-tbody');
   if (!albumsTbody || !tracksTbody) return;
   const lowAlbums = computeLowQualityAlbums();
-  const lowTracks = computeLowQualityTracks();
+  const onlyNoted = document.getElementById('lq-tracks-only-noted')?.checked;
+  const lowTracks = computeLowQualityTracks().filter(t => !onlyNoted || t.note > 0);
   const albumsCounterEl = document.getElementById('lowquality-albums-counter');
   if (albumsCounterEl) albumsCounterEl.textContent = `${lowAlbums.length} album${lowAlbums.length > 1 ? 's' : ''}`;
   const tracksCounterEl = document.getElementById('lowquality-tracks-counter');
