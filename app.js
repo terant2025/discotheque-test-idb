@@ -12891,11 +12891,11 @@ function computeLowQualityTracks() {
   const result = [];
   albums.forEach(a => {
     (albumTracksCache[a.id] || []).forEach(t => {
-      if (t.bitrate && t.bitrate < 320) result.push({ artist: a.artist, album: a.album, title: t.title, bitrate: t.bitrate });
+      if (t.bitrate && t.bitrate < 320) result.push({ artist: a.artist, album: a.album, title: t.title, bitrate: t.bitrate, note: t.rating || 0 });
     });
   });
   tracks.forEach(t => {
-    if (t.bitrate && t.bitrate < 320) result.push({ artist: t.artist, album: t.album || '', title: t.title, bitrate: t.bitrate });
+    if (t.bitrate && t.bitrate < 320) result.push({ artist: t.artist, album: t.album || '', title: t.title, bitrate: t.bitrate, note: t.note || 0 });
   });
   return result.sort((a, b) => a.bitrate - b.bitrate);
 }
@@ -12918,8 +12918,8 @@ function exportLowQualityAlbumsCSV() {
 }
 
 function exportLowQualityTracksCSV() {
-  const rows = [['artiste', 'album', 'titre', 'bitrate_kbps']];
-  computeLowQualityTracks().forEach(t => rows.push([t.artist, t.album, t.title, t.bitrate]));
+  const rows = [['artiste', 'album', 'titre', 'bitrate_kbps', 'note_mb']];
+  computeLowQualityTracks().forEach(t => rows.push([t.artist, t.album, t.title, t.bitrate, t.note || '']));
   _csvDownload('discotheque_basse_qualite_titres.csv', rows);
   toast(`Export CSV téléchargé ✓ (${rows.length - 1} titre${rows.length - 1 > 1 ? 's' : ''})`);
 }
@@ -12951,7 +12951,8 @@ function renderLowQuality() {
       <td style="color:var(--text3)">${esc(t.album || '–')}</td>
       <td style="font-weight:500">${esc(t.title)}</td>
       <td class="mono" style="color:var(--text2)">${t.bitrate}k</td>
-    </tr>`).join('') : '<tr><td colspan="4" class="empty" style="padding:20px;text-align:center">Aucun titre avec un bitrate connu sous 320 kbps 🎉</td></tr>';
+      <td class="mono" style="color:var(--amber)">${t.note ? '★'.repeat(t.note) : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty" style="padding:20px;text-align:center">Aucun titre avec un bitrate connu sous 320 kbps 🎉</td></tr>';
 }
 
 async function renderJournal() {
