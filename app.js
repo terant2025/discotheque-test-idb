@@ -6708,7 +6708,13 @@ async function loadMoreLastfm() {
   if (_lastfmAbort) {
     _lastfmAbort = false;
     document.getElementById('btn-lastfm-more').style.display = 'none';
-    // Reprendre depuis le checkpoint si disponible, sinon depuis la page courante
+    // Reprendre depuis le checkpoint si disponible, sinon depuis la page SUIVANTE
+    // (correctif v2026.07.13-13, cf. CHANGELOG : _lastfmCurrentPage pointe vers la DERNIÈRE
+    // page déjà comptée au moment de la pause manuelle — fetchLastfmPage(_lastfmCurrentPage)
+    // la refaisait donc systématiquement, recomptant jusqu'à LASTFM_PAGE_SIZE scrobbles en
+    // double à chaque cycle pause/reprise. Le chemin "reprise depuis un checkpoint" ci-dessus
+    // n'est lui pas concerné : saveLastfmCheckpoint() est appelé AVANT que la page en erreur
+    // ait été comptée, donc cp.page désigne bien la prochaine page à traiter.)
     const cp = loadLastfmCheckpoint();
     if (cp) {
       _lastfmCounts = {};
@@ -6716,7 +6722,7 @@ async function loadMoreLastfm() {
       _lastfmTotalPages = cp.totalPages;
       await fetchLastfmPage(cp.page);
     } else {
-      await fetchLastfmPage(_lastfmCurrentPage);
+      await fetchLastfmPage(_lastfmCurrentPage + 1);
     }
   } else {
     _lastfmAbort = true;
