@@ -87,6 +87,8 @@
 <!-- APP_VERSION: v2026.07.13-11 — 🔍 Bouton recherche DuckDuckGo dans la modale de choix de pochette (Pochettes manquantes), demandé par Antoine. searchCoverOnDuckDuckGo() ouvre un nouvel onglet avec une recherche d'images pré-remplie ("artiste album album cover"). DuckDuckGo n'a pas d'API d'images publique/gratuite — pas d'intégration directe possible dans la grille de propositions automatiques (Discogs/Last.fm existants) — flux manuel : trouver l'image, copier son URL, la coller dans le champ existant puis "Prévisualiser". -->
 <!-- APP_VERSION: v2026.07.13-12 — 🪄 Auto-matcher de MBID pour les morceaux isolés (IDs manquants), demandé par Antoine ("beaucoup de morceaux isolés sans MBID alors que le rapprochement semble facile"). Root cause du manque identifiée : l'enrichissement MBID automatique existant (syncListenBrainz()) n'alimente que le cache des écoutes last.fm/LB (_lastfmTrackCounts) — jamais les morceaux POSSÉDÉS eux-mêmes (tableau `tracks`), d'où l'obligation de passer par le bouton manuel un par un jusqu'ici. Nouveau bouton "🪄 Auto-matcher les évidents" : recherche MusicBrainz automatique par artiste+titre (même endpoint public que la recherche manuelle existante), n'applique QUE les correspondances très confiantes (score MusicBrainz ≥ 95 ET artiste ET titre strictement identiques une fois normalisés via artistVariants()/normalizeKey()) — un cas ambigu reste pour la revue manuelle existante, jamais de MBID appliqué à l'aveugle. Pacing ~1,1s entre requêtes (limite MusicBrainz déjà documentée ailleurs dans ce fichier), pause/reprise via le même bouton, pas de perte de progression en cas d'interruption (liste re-filtrée sur tracksWithoutMbid() à chaque relance). -->
 <!-- APP_VERSION: v2026.07.13-13 — 🐛 Bug de recomptage à chaque pause/reprise de "Sync last.fm" (plein), trouvé en creusant un écart signalé par Antoine entre Insights (367 409 écoutes) et le vrai total last.fm (293 493 scrobbles). Diagnostic mené via des vérifications en direct dans la console (_lastfmTrackCounts) : la piste ListenBrainz écartée en premier (0 morceau avec recording_mbid — l'enrichissement MBID n'a jamais tourné sur les morceaux), la piste "résidu de reset historique" écartée aussi (fetchLastfmPage() réinitialise bien _lastfmTrackCounts avant un plein sync). Root cause trouvée dans loadMoreLastfm() (bouton "⏸ Pause"/"▶ Reprendre" pendant un plein sync) : à la pause, _lastfmCurrentPage pointe vers la DERNIÈRE page déjà comptée (le while de fetchLastfmPage() ne coupe qu'AVANT la page suivante, JS étant single-threaded) — mais la reprise appelait fetchLastfmPage(_lastfmCurrentPage), refaisant donc systématiquement cette même page et recomptant jusqu'à LASTFM_PAGE_SIZE (200) scrobbles en double à chaque cycle pause/reprise. Le chemin "reprise depuis un checkpoint" (après une erreur réseau) n'était lui pas concerné : saveLastfmCheckpoint() est appelé AVANT que la page en erreur ait été comptée, donc cp.page désignait déjà la bonne page. Corrigé : fetchLastfmPage(_lastfmCurrentPage + 1). ⚠️ Ne corrige que l'avenir — le résidu déjà accumulé dans _lastfmTrackCounts/lastfm_tracks nécessite un "🎵 Sync morceaux complète" relancé de zéro pour disparaître (ce compteur-là utilise sa propre boucle dans startTrackSync(), déjà saine — cf. commentaire "BUG HISTORIQUE" existant dans le fichier — donc non affectée par ce bug-ci). -->
+<!-- APP_VERSION: v2026.07.13-14 — 🐛 3 correctifs Insights repérés par Antoine. (1) "Écoutes ce même jour, les années passées" affichait parfois le morceau EN COURS D'ÉCOUTE dans chaque année passée — quirk connu de l'API last.fm : user.getrecenttracks inclut parfois le "now playing" en tête de liste indépendamment du filtre from/to demandé ; filtré désormais via l'absence de date.uts / @attr.nowplaying==='true' (un vrai scrobble passé a toujours un timestamp). (2) Graphique "Provenance des données" jugé peu clair : chaque ligne n'affichait que 4 nombres bruts séparés par un point médian discret ("0·6·2509·13"), facile à mal lire comme des tirets/nombres concaténés — icônes de la légende (🔒🔄📥∅) répétées sur chaque ligne pour rendre chaque nombre auto-explicatif. (3) "Various Artists" (compilations) écrasait le Top 10 artistes par nombre d'albums possédés (216 albums, loin devant tout le monde) — exclu des deux classements Top 10 artistes (possédés + écoutes last.fm), ce n'est pas un vrai artiste. -->
+<!-- APP_VERSION: v2026.07.13-15 — 🔉 Nouvel onglet "Basse qualité" dans Import/Export, demandé par Antoine : liste les albums et morceaux isolés dont MusicBee connaît le bitrate et où celui-ci est strictement inférieur à 320 kbps. N'affiche que ce qui a une valeur de bitrate réelle (t.bitrate, déjà présent via l'import XML) — un morceau sans info de bitrate connue (FLAC exclu naturellement, bitrate bien plus élevé ; ou tag manquant) n'apparaît jamais, faute de donnée pour juger. Pour un album : "pire piste" = bitrate le plus bas parmi ses pistes connues (via albumTracksCache, déjà utilisé ailleurs pour les tracklists), n'apparaît que si cette pire piste est sous 320. Même mécanisme switchImportTab() que les autres sous-onglets, badge de comptage mis à jour à la fois par updateNavBadges() et à l'ouverture de l'onglet. -->
 
 
 
@@ -225,7 +227,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-13</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.13-15</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1130,6 +1132,7 @@
         <button class="covers-filter-btn" id="import-tab-btn-completeness" onclick="switchImportTab('completeness')">🧩 Complétude <span id="nav-completeness-count" style="opacity:0.7">0</span></button>
         <button class="covers-filter-btn" id="import-tab-btn-audit" onclick="switchImportTab('audit')">🔎 Audit collection</button>
         <button class="covers-filter-btn" id="import-tab-btn-journal" onclick="switchImportTab('journal')">📰 Journal</button>
+        <button class="covers-filter-btn" id="import-tab-btn-lowquality" onclick="switchImportTab('lowquality')">🔉 Basse qualité <span id="nav-lowquality-count" style="opacity:0.7">0</span></button>
       </div>
 
       <div id="import-tab-sources">
@@ -1460,7 +1463,34 @@
       </div>
       <div id="journal-results"></div>
     </div>
+
+    <!-- BASSE QUALITÉ (sous-onglet Import/Export, v2026.07.13-15, demandé par Antoine) —
+         albums/morceaux avec un bitrate MusicBee connu (« noté dans MB ») sous 320 kbps.
+         N'affiche que ce qui a une valeur de bitrate réelle : un morceau sans info de bitrate
+         (streaming, tag manquant) n'apparaît jamais ici, faute de donnée pour juger. -->
+    <div id="import-tab-lowquality" style="display:none">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        Albums et morceaux dont MusicBee connaît le bitrate et où celui-ci est inférieur à
+        320 kbps (CD-quality MP3). Les fichiers FLAC/lossless ne sont jamais concernés (bitrate
+        bien plus élevé) — et un morceau sans bitrate connu n'apparaît pas ici, faute de donnée.
+      </div>
+      <h3 style="font-size:14px;margin:0 0 8px">💿 Albums <span id="lowquality-albums-counter" style="font-size:12px;color:var(--text3);font-weight:400"></span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Artiste / Album</th><th style="width:110px">Pire piste</th><th style="width:110px">Pistes basses</th><th style="width:90px">Actions</th></tr></thead>
+          <tbody id="lowquality-albums-tbody"></tbody>
+        </table>
+      </div>
+      <h3 style="font-size:14px;margin:16px 0 8px">🎧 Morceaux isolés <span id="lowquality-tracks-counter" style="font-size:12px;color:var(--text3);font-weight:400"></span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Artiste / Titre</th><th style="width:110px">Bitrate</th></tr></thead>
+          <tbody id="lowquality-tracks-tbody"></tbody>
+        </table>
+      </div>
+    </div>
     </div><!-- /sec-import -->
+
 
     <!-- SESSION DE NOTATION -->
     <div class="section" id="sec-ratesession">

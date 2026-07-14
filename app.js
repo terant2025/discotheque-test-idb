@@ -3088,6 +3088,8 @@ function updateNavBadges() {
     if (coversBadge) coversBadge.textContent = ownedAlbumsForCovers().filter(a => !a.cover_url).length;
     const completenessBadge = document.getElementById('nav-completeness-count');
     if (completenessBadge) completenessBadge.textContent = ownedAlbumsForCovers().filter(a => computeAlbumCompleteness(a).score <= 2).length;
+    const lowQualityBadge = document.getElementById('nav-lowquality-count');
+    if (lowQualityBadge) lowQualityBadge.textContent = computeLowQualityAlbums().length + computeLowQualityTracks().length;
     const rsBadge = document.getElementById('nav-ratesession-count');
     if (rsBadge) rsBadge.textContent = ownedAlbumsForCovers().filter(a => !a.note).length + tracks.filter(t => !t.note).length;
     const ntrBadge = document.getElementById('nav-notestoreport-count');
@@ -12858,6 +12860,56 @@ function _journalFolderLabel(a) {
   return labels.join(' + ');
 }
 
+// ===================== BASSE QUALITÉ (v2026.07.13-15, demandé par Antoine) =====================
+// Albums/morceaux avec un bitrate MusicBee CONNU (source: t.bitrate, déjà présent dans
+// albumTracksCache/tracks depuis l'import XML — cf. importMusicBeeXML()) et strictement
+// inférieur à 320 kbps. Ne considère que les pistes ayant une valeur de bitrate réelle : un
+// morceau sans info (FLAC déjà exclu naturellement — bitrate bien plus élevé — ou tag manquant)
+// n'apparaît jamais ici, faute de donnée pour juger. Pour un album, "pire piste" = le bitrate
+// le plus bas parmi ses pistes connues (via albumTracksCache, déjà utilisé ailleurs pour les
+// tracklists) ; un album n'apparaît que si cette pire piste est sous 320.
+function computeLowQualityAlbums() {
+  const result = [];
+  albums.forEach(a => {
+    const known = (albumTracksCache[a.id] || []).filter(t => t.bitrate);
+    if (!known.length) return;
+    const worst = Math.min(...known.map(t => t.bitrate));
+    if (worst >= 320) return;
+    result.push({ album: a, worst, lowCount: known.filter(t => t.bitrate < 320).length, totalKnown: known.length });
+  });
+  return result.sort((x, y) => x.worst - y.worst);
+}
+function computeLowQualityTracks() {
+  return tracks.filter(t => t.bitrate && t.bitrate < 320).sort((a, b) => a.bitrate - b.bitrate);
+}
+function renderLowQuality() {
+  const albumsTbody = document.getElementById('lowquality-albums-tbody');
+  const tracksTbody = document.getElementById('lowquality-tracks-tbody');
+  if (!albumsTbody || !tracksTbody) return;
+  const lowAlbums = computeLowQualityAlbums();
+  const lowTracks = computeLowQualityTracks();
+  const albumsCounterEl = document.getElementById('lowquality-albums-counter');
+  if (albumsCounterEl) albumsCounterEl.textContent = `${lowAlbums.length} album${lowAlbums.length > 1 ? 's' : ''}`;
+  const tracksCounterEl = document.getElementById('lowquality-tracks-counter');
+  if (tracksCounterEl) tracksCounterEl.textContent = `${lowTracks.length} morceau${lowTracks.length > 1 ? 'x' : ''}`;
+  const badge = document.getElementById('nav-lowquality-count');
+  if (badge) badge.textContent = lowAlbums.length + lowTracks.length;
+
+  albumsTbody.innerHTML = lowAlbums.length ? lowAlbums.map(r => `
+    <tr onclick="editAlbum('${sid(r.album.id)}')" style="cursor:pointer">
+      <td><div style="font-weight:500">${esc(r.album.album)}</div><div class="sub" style="font-size:11px">${artistLink(r.album.artist)}</div></td>
+      <td class="mono" style="color:var(--text2)">${r.worst}k</td>
+      <td class="mono" style="color:var(--text3)">${r.lowCount}/${r.totalKnown}</td>
+      <td><button class="btn btn-sm" onclick="event.stopPropagation();editAlbum('${sid(r.album.id)}')">Ouvrir</button></td>
+    </tr>`).join('') : '<tr><td colspan="4" class="empty" style="padding:20px;text-align:center">Aucun album avec un bitrate MusicBee connu sous 320 kbps 🎉</td></tr>';
+
+  tracksTbody.innerHTML = lowTracks.length ? lowTracks.map(t => `
+    <tr>
+      <td><div style="font-weight:500">${esc(t.title)}</div><div class="sub" style="font-size:11px">${artistLink(t.artist)}</div></td>
+      <td class="mono" style="color:var(--text2)">${t.bitrate}k</td>
+    </tr>`).join('') : '<tr><td colspan="2" class="empty" style="padding:20px;text-align:center">Aucun morceau isolé avec un bitrate connu sous 320 kbps 🎉</td></tr>';
+}
+
 async function renderJournal() {
   const sel = document.getElementById('journal-snapshot-select');
   const status = document.getElementById('journal-status');
@@ -13007,7 +13059,7 @@ function computeDecadeDistribution() {
 function computeTopArtistsByPlays(n = 10) {
   const counts = {};
   Object.values(_lastfmTrackCounts).forEach(d => {
-    if (!d.artist) return;
+    if (!d.artist || d.artist === 'Various Artists') return; // compilation, pas un vrai artiste
     counts[d.artist] = (counts[d.artist] || 0) + (d.plays || 0);
   });
   return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, n);
@@ -13016,7 +13068,7 @@ function computeTopArtistsByPlays(n = 10) {
 function computeTopArtistsByOwned(n = 10) {
   const counts = {};
   insightsOwnedAlbums().forEach(a => {
-    if (!a.artist) return;
+    if (!a.artist || a.artist === 'Various Artists') return; // compilation, pas un vrai artiste — écraserait le classement (demandé par Antoine)
     counts[a.artist] = (counts[a.artist] || 0) + 1;
   });
   return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, n);
@@ -13099,7 +13151,12 @@ async function loadOnThisDayListening() {
       const res = await fetch(url);
       const data = await res.json();
       const raw = data.recenttracks?.track || [];
-      const list = (Array.isArray(raw) ? raw : [raw]).filter(t => t && t.name);
+      // last.fm inclut parfois le morceau EN COURS D'ÉCOUTE ("now playing") en tête de liste,
+      // indépendamment du filtre from/to demandé — repérable par l'absence de `date` (un vrai
+      // scrobble passé a toujours un timestamp `date.uts`) et/ou @attr.nowplaying==='true'.
+      // Sans ce filtre, le morceau actuellement écouté apparaissait à tort dans CHAQUE année
+      // (bug repéré par Antoine : "l'anniversaire... met le titre en cours d'écoute").
+      const list = (Array.isArray(raw) ? raw : [raw]).filter(t => t && t.name && t.date && t['@attr']?.nowplaying !== 'true');
       if (list.length) {
         _onThisDayResults.push({
           year: y,
@@ -13210,7 +13267,7 @@ function renderProvenanceTable() {
       <div style="display:flex;height:12px;border-radius:3px;overflow:hidden;background:var(--bg3)">
         ${seg(r.manuel, 'var(--accent)')}${seg(r.auto, 'var(--purple, #b08cff)')}${seg(r.import, 'var(--text3)')}${seg(r.vide, 'transparent')}
       </div>
-      <span class="mono" style="font-size:10px;color:var(--text3);white-space:nowrap">${r.manuel}·${r.auto}·${r.import}·${r.vide}</span>
+      <span class="mono" style="font-size:10px;color:var(--text3);white-space:nowrap">🔒${r.manuel} · 🔄${r.auto} · 📥${r.import} · ∅${r.vide}</span>
     </div>`).join('');
 }
 
@@ -15374,7 +15431,7 @@ function renderAudit() {
 // notation (boutons covers-filter-btn) plutôt qu'un vrai système de nav — ce sont 3 vues
 // mutuellement exclusives DANS le même écran, pas 3 destinations de navigation distinctes.
 function switchImportTab(tab) {
-  ['sources', 'assoc', 'missingids', 'covers', 'completeness', 'audit', 'journal'].forEach(t => {
+  ['sources', 'assoc', 'missingids', 'covers', 'completeness', 'audit', 'journal', 'lowquality'].forEach(t => {
     const el = document.getElementById('import-tab-' + t);
     if (el) el.style.display = t === tab ? '' : 'none';
     const btn = document.getElementById('import-tab-btn-' + t);
@@ -15386,6 +15443,7 @@ function switchImportTab(tab) {
   if (tab === 'completeness') renderCompleteness();
   if (tab === 'audit') renderAudit();
   if (tab === 'journal') renderJournal();
+  if (tab === 'lowquality') renderLowQuality();
 }
 
 // ===================== IDs MANQUANTS =====================
