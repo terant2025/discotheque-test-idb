@@ -95,6 +95,7 @@
 <!-- APP_VERSION: v2026.07.13-19 — ☑️ Filtre "Uniquement les morceaux notés" dans l'onglet "Basse qualité" (Titres), demandé par Antoine. Case à cocher au-dessus du tableau, filtre sur note > 0 (le champ ajouté en -18) — respecté aussi par l'export CSV, pour rester cohérent avec ce qui est affiché à l'écran. -->
 <!-- APP_VERSION: v2026.07.13-20 — ☑️ Filtre "Uniquement les morceaux isolés" dans l'onglet "Basse qualité" (Titres), demandé par Antoine ("un filtre sur les morceaux isolés dans top titres" — interprété comme continuant sur cet onglet, puisque "Titres" y mélange pistes d'albums et morceaux isolés depuis v2026.07.13-16 ; à ajuster si ce n'était pas le bon endroit). Chaque ligne de computeLowQualityTracks() porte désormais un flag `isolated` (true pour les morceaux du tableau `tracks`, false pour les pistes d'albums via albumTracksCache) ; nouvelle case à cocher filtrant dessus, combinable avec "Uniquement les morceaux notés" existante, respectée aussi par l'export CSV. -->
 <!-- APP_VERSION: v2026.07.15-01 — 🐛 Deux bugs signalés par Antoine après la migration IndexedDB (Phase 1). (1) "Sync qui ne s'arrête jamais" — sbUpsert() et 6 autres endroits (flushTrackCountsToSupabase, flushAlbumCountsToSupabase, saveTracklist, saveMusicBeeTracks, purge des albums supprimés, enrichissement mb_release_id) découpaient leurs upserts/delete en tranches de 100-400 lignes, protection héritée de Supabase réseau (limite de payload HTTP) devenue contre-productive contre le shim LocalDB : CHAQUE tranche réécrivait l'INTÉGRALITÉ de la table sur IndexedDB, jusqu'à ~290 réécritures complètes pour lastfm_tracks (116 334 lignes chez Antoine) par flush. Mesuré (Node + fake-indexeddb) : 8.9s en tranches de 400 vs 0.2s en un seul appel sur une table de 37 922 lignes. Le pire cas (enrichissement mb_release_id) faisait une réécriture complète PAR ALBUM via des .update().eq('id') individuels — remplacé par un upsert groupé unique. Toutes les tranches supprimées : un seul appel, quelle que soit la taille, contre le stockage local. LocalDB._persist() réécrite pour différer/regrouper (debounce 40ms) les écritures IndexedDB réelles, avec flush forcé sur `beforeunload`. (2) Journal (Import/Export) affichait "Invalid Date" et "Erreur : No rows found" — collection_snapshots.created_at reposait sur `default now()` côté Postgres, jamais reproduit par le shim LocalDB (désormais stampé explicitement dans createSnapshot()) ; compareJournal() comparait un id de table (number) à sel.value (toujours string en HTML), échouant sur l'égalité stricte du shim — corrigé via Number(id). -->
+<!-- APP_VERSION: v2026.07.15-02 — 🎵 last.fm morceaux (missing tracks), demandé par Antoine : (1) bouton "✕ Filtres" dans la barre d'outils réinitialisant en un clic les 6 filtres propres à cette liste (artiste/titre/album/écoutes/tri/statut) — ne touche pas la recherche globale, partagée avec les autres écrans. (2) Clic sur un nom d'artiste ou d'album dans le tableau → remplit le champ de filtre correspondant et relance la liste, au lieu de devoir le retaper à la main ; combinable avec les autres filtres actifs. Le lien existant "Vue Artiste" sur le nom d'artiste est conservé, déplacé sur une petite icône 👤 séparée à côté du nom pour ne pas entrer en conflit avec le nouveau clic-filtre. Un morceau ayant plusieurs tags Album consolidés (d.album, ex. "A / B") affiche chaque album cliquable séparément. -->
 
 
 
@@ -233,7 +234,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.15-01</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.15-02</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -748,6 +749,7 @@
         </select>
         <div class="toolbar-right">
           <span id="mtrack-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" onclick="clearMissingTracksFilters()" title="Réinitialiser tous les filtres de cette liste">✕ Filtres</button>
           <button class="btn btn-sm" onclick="exportMissingTracksCSV()" title="Exporter CSV">⬇ CSV</button>
         </div>
       </div>

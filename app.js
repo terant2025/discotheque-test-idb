@@ -3590,8 +3590,8 @@ function renderMissingTracks() {
     return `<tr style="opacity:${isIgnored ? 0.45 : 1}">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-key="${sid(key)}" ${selectedMissingTrackKeys.has(key) ? 'checked' : ''} onchange="toggleMissingTrackSelected('${sid(key)}', this.checked)"></td>
     <td style="font-weight:500">${esc(d.track)}${stBadge}</td>
-    <td style="color:var(--text2);font-size:13px">${artistLink(d.artist)}</td>
-    <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}${albumBadge}</td>
+    <td style="color:var(--text2);font-size:13px"><span onclick="event.stopPropagation();filterMissingTracksByArtist('${sid(d.artist)}')" style="cursor:pointer" title="Filtrer la liste sur cet artiste">${esc(d.artist)}</span> <span onclick="event.stopPropagation();openArtistView('${sid(d.artist)}')" style="cursor:pointer;opacity:.5" title="Voir la Vue Artiste">👤</span></td>
+    <td style="color:var(--text3);font-size:12px">${albumNames.length ? albumNames.map(al => `<span onclick="event.stopPropagation();filterMissingTracksByAlbum('${sid(al)}')" style="cursor:pointer" title="Filtrer la liste sur cet album">${esc(al)}</span>`).join(' / ') : '–'}${albumBadge}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
     <td style="display:flex;gap:3px;flex-wrap:wrap">
       <button class="btn btn-sm ${isIgnored?'btn-danger':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
@@ -3607,6 +3607,44 @@ function renderMissingTracks() {
   const selAllCb = document.getElementById('select-all-mtracks');
   if (selAllCb) selAllCb.checked = slice.length > 0 && slice.every(d => selectedMissingTrackKeys.has(normalizeKey(d.artist, d.track)));
   renderMtrackBulkBar();
+}
+
+// Réinitialise tous les filtres propres à cette liste (artiste/titre/album/écoutes/tri/statut),
+// demandé par Antoine — jusqu'ici il fallait vider chaque champ à la main un par un.
+// Ne touche volontairement pas #global-search (recherche globale partagée avec les autres écrans).
+function clearMissingTracksFilters() {
+  const artistEl = document.getElementById('filter-mtrack-artist');
+  const titleEl  = document.getElementById('filter-mtrack-title');
+  const albumEl  = document.getElementById('filter-mtrack-album');
+  const playsEl  = document.getElementById('filter-mtrack-plays');
+  const sortEl   = document.getElementById('filter-mtrack-sort');
+  const statusEl = document.getElementById('filter-mtrack-status');
+  if (artistEl) artistEl.value = '';
+  if (titleEl)  titleEl.value  = '';
+  if (albumEl)  albumEl.value  = '';
+  if (playsEl)  playsEl.value  = '';
+  if (sortEl)   sortEl.value   = 'plays';
+  if (statusEl) statusEl.value = '';
+  renderMissingTracks();
+}
+
+// Clic sur un nom d'artiste dans la liste → filtre toute la liste sur cet artiste, demandé par
+// Antoine. Remplit le champ dédié plutôt qu'un filtre séparé, pour rester combinable avec les
+// autres filtres (titre/album/écoutes/statut) déjà en place et visible/modifiable ensuite.
+function filterMissingTracksByArtist(encodedArtist) {
+  const el = document.getElementById('filter-mtrack-artist');
+  if (!el) return;
+  el.value = unsid(encodedArtist);
+  renderMissingTracks();
+}
+
+// Même principe pour un clic sur un nom d'album (un morceau peut porter plusieurs tags Album
+// consolidés — d.album — chacun cliquable séparément, cf. rendu de la colonne Album ci-dessus).
+function filterMissingTracksByAlbum(encodedAlbum) {
+  const el = document.getElementById('filter-mtrack-album');
+  if (!el) return;
+  el.value = unsid(encodedAlbum);
+  renderMissingTracks();
 }
 
 function addTrackFromMissingIdx(idx) {
