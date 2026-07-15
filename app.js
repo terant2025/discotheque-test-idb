@@ -367,14 +367,64 @@ class LocalDBQuery {
 }
 
 class LocalDB {
-  constructor() { this._cache = {}; this._nextIds = {}; this._loading = {}; }
+  constructor() {
+    this._cache = {}; this._nextIds = {}; this._loading = {};
+    // Bug corrigé v2026.07.15 ("la sync reste active en permanence") : _persist() écrivait
+    // AUPARAVANT l'intégralité de la table sur IndexedDB à CHAQUE appel. Or plusieurs endroits du
+    // code (sbUpsert, flushTrackCountsToSupabase, flushAlbumCountsToSupabase, la purge des albums
+    // supprimés, etc.) découpent volontairement leurs upserts/delete en tranches de 200-400 lignes
+    // — une habitude héritée de l'époque Supabase réseau (éviter les payloads HTTP trop gros),
+    // mais totalement contre-productive ici puisque CHAQUE tranche re-sérialisait et réécrivait la
+    // table COMPLÈTE (jusqu'à 116 000+ lignes pour lastfm_tracks). Mesuré : ~95 tranches de 400
+    // lignes sur une table de 37 922 lignes prennent 7-8s (contre 0.3s en un seul appel), et
+    // lastfm_tracks (116 334 lignes chez Antoine, tranches de 400 → ~291 réécritures complètes)
+    // pouvait bloquer l'indicateur "🟢 Sync…" plusieurs minutes d'affilée.
+    // Fix : _persist() ne réécrit plus IMMÉDIATEMENT — elle marque la table "sale" et planifie un
+    // flush unique différé (debounce 40ms). _cache[name] reste à jour en mémoire à chaque appel
+    // (aucune incohérence de lecture), seule l'écriture PHYSIQUE sur disque est regroupée. Les
+    // boucles par tranches ci-dessus n'attendant plus une vraie écriture disque entre deux
+    // itérations, elles s'enchaînent en quelques ms — sous les 40ms du debounce — qui ne déclenche
+    // donc qu'UNE SEULE écriture réelle pour toute la rafale, sans modifier aucun appelant.
+    this._dirty = {};
+    this._flushTimers = {};
+    this._flushPromises = {};
+    // Filet de sécurité : flush immédiat de tout ce qui reste en attente si l'onglet se ferme
+    // pendant la fenêtre de 40ms, pour ne jamais perdre la toute dernière rafale.
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('beforeunload', () => { this.flushAllPending(); });
+    }
+  }
   from(table) { return new LocalDBQuery(this, table); }
   async _getTable(name) {
     if (this._cache[name]) return this._cache[name];
     if (!this._loading[name]) this._loading[name] = idbGetRaw('t:' + name).then(v => v || []);
     return (this._cache[name] = await this._loading[name]);
   }
-  async _persist(name) { await idbPutRaw('t:' + name, this._cache[name]); }
+  _persist(name) {
+    this._dirty[name] = true;
+    if (!this._flushPromises[name]) {
+      this._flushPromises[name] = new Promise((resolve, reject) => {
+        this._flushTimers[name] = setTimeout(() => {
+          this._flushTimers[name] = null;
+          this._dirty[name] = false;
+          this._flushPromises[name] = null;
+          idbPutRaw('t:' + name, this._cache[name]).then(() => resolve(true), reject);
+        }, 40);
+      });
+    }
+    return this._flushPromises[name];
+  }
+  // Écrit immédiatement toutes les tables encore "sales" — appelé à la fermeture de l'onglet pour
+  // ne jamais perdre la dernière rafale d'écritures groupées.
+  async flushAllPending() {
+    const names = Object.keys(this._dirty).filter(n => this._dirty[n]);
+    for (const name of names) {
+      if (this._flushTimers[name]) { clearTimeout(this._flushTimers[name]); this._flushTimers[name] = null; }
+      this._dirty[name] = false;
+      this._flushPromises[name] = null;
+      try { await idbPutRaw('t:' + name, this._cache[name]); } catch(e) {}
+    }
+  }
   _nextId(name) {
     if (!this._nextIds[name]) {
       let max = 0;
@@ -797,11 +847,15 @@ async function sbUpsert(table, rows, onConflict) {
     seen.set(k, r);
   });
   const deduped = [...seen.values()];
-  const size = 400;
-  for (let i = 0; i < deduped.length; i += size) {
-    const { error } = await window._sb.from(table).upsert(deduped.slice(i, i + size), { onConflict });
-    if (error) throw error;
-  }
+  // Bug corrigé v2026.07.15 ("sync qui ne s'arrête jamais") : ce découpage en tranches de 400
+  // lignes n'a plus lieu d'être depuis la migration IndexedDB (Phase 1) — il ne protégeait que
+  // contre la limite de payload HTTP du VRAI Supabase, désormais hors-jeu. Contre le shim LocalDB,
+  // chaque tranche réécrivait pourtant l'INTÉGRALITÉ de la table (jusqu'à 116 000+ lignes pour
+  // lastfm_tracks) : ~95 tranches sur une table de 37 922 lignes prenaient 7-8s contre 0.3s en un
+  // seul appel — d'où l'indicateur "🟢 Sync…" qui semblait ne jamais se terminer. Un seul appel,
+  // quelle que soit la taille, est strictement local (mémoire + IndexedDB) et ne coûte rien de plus.
+  const { error } = await window._sb.from(table).upsert(deduped, { onConflict });
+  if (error) throw error;
 }
 
 // Dédoublonner le tableau albums en mémoire
@@ -975,9 +1029,10 @@ async function saveToSupabase(opts) {
     }
     const toDelete = remoteIds.filter(id => !localIds.has(id));
     await autoSnapshotBeforeDelete(toDelete.length);
-    for (let i = 0; i < toDelete.length; i += 200) {
-      await window._sb.from('albums').delete().in('id', toDelete.slice(i, i + 200));
-    }
+    // Bug corrigé v2026.07.15 : plus de découpage en tranches de 200 (même raison que sbUpsert
+    // ci-dessus) — un seul .delete().in() couvre toute la liste sans coût supplémentaire côté
+    // LocalDB, et évite une réécriture complète de la table `albums` par tranche.
+    if (toDelete.length) await window._sb.from('albums').delete().in('id', toDelete);
     if (toDelete.length) console.log(`${toDelete.length} albums supprimés (sync)`);
 
     // ── Tracks isolés (PK composite artist_norm+title_norm) ──────────────────
@@ -6463,12 +6518,17 @@ async function _flushLbToSupabase(isFinal) {
 
     if (isFinal) {
       // Enrichir mb_release_id dans albums[] Supabase
+      // Bug corrigé v2026.07.15 ("sync qui ne s'arrête jamais") : cette boucle faisait un
+      // .update().eq('id', a.id) PAR ALBUM (pas par tranche) — contre le shim LocalDB, chaque
+      // appel réécrivait l'intégralité de la table `albums`, donc jusqu'à ~2000+ réécritures
+      // complètes rien que pour cette étape. Un seul upsert groupé (clé id) fait la même chose
+      // en un seul appel.
       const withMbid = albums.filter(a => a.mb_release_id);
-      for (let i = 0; i < withMbid.length; i += 200) {
-        const batch = withMbid.slice(i, i + 200);
-        for (const a of batch) {
-          await window._sb.from('albums').update({ mb_release_id: a.mb_release_id }).eq('id', a.id).then(() => {});
-        }
+      if (withMbid.length) {
+        await window._sb.from('albums').upsert(
+          withMbid.map(a => ({ id: a.id, mb_release_id: a.mb_release_id })),
+          { onConflict: 'id' }
+        );
       }
       saveToStorage();
     }
@@ -6516,12 +6576,12 @@ async function flushTrackCountsToSupabase() {
       artist: d.artist, track: d.track, album: d.album || '',
       plays: d.plays, updated_at: new Date().toISOString()
     }));
-    // Upsert par tranches de 400 — clé (artist, track, album)
-    for (let i = 0; i < rows.length; i += 400) {
-      const { error } = await window._sb.from('lastfm_tracks')
-        .upsert(rows.slice(i, i + 400), { onConflict: 'artist,track,album' });
-      if (error) console.warn('flush chunk error:', error);
-    }
+    // Bug corrigé v2026.07.15 : plus de découpage par tranches de 400 (cf. sbUpsert) — pour cette
+    // table qui atteint 116 000+ lignes chez Antoine, ça représentait ~290 réécritures complètes
+    // de la table à chaque flush. Un seul upsert, quelle que soit la taille.
+    const { error } = await window._sb.from('lastfm_tracks')
+      .upsert(rows, { onConflict: 'artist,track,album' });
+    if (error) console.warn('flush chunk error:', error);
     console.log(`lastfm_tracks : ${rows.length} morceaux sauvegardés`);
   } catch(e) { console.warn('Erreur flush lastfm_tracks:', e); }
 }
@@ -6536,11 +6596,10 @@ async function flushAlbumCountsToSupabase() {
     const rows = Object.values(_lastfmCounts).map(d => ({
       artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: new Date().toISOString()
     }));
-    for (let i = 0; i < rows.length; i += 400) {
-      const { error } = await window._sb.from('lastfm_data')
-        .upsert(rows.slice(i, i + 400), { onConflict: 'artist,album' });
-      if (error) console.warn('flush chunk error (albums):', error);
-    }
+    // Bug corrigé v2026.07.15 : plus de découpage par tranches (cf. sbUpsert / flushTrackCountsToSupabase).
+    const { error } = await window._sb.from('lastfm_data')
+      .upsert(rows, { onConflict: 'artist,album' });
+    if (error) console.warn('flush chunk error (albums):', error);
     console.log(`lastfm_data : ${rows.length} albums sauvegardés`);
   } catch(e) { console.warn('Erreur flush lastfm_data:', e); }
 }
@@ -6860,10 +6919,10 @@ async function saveTracklist(albumId, tracks_) {
     disc_number:     t.disc_number||null,
     rating:          t.rating||null,
   }));
-  for (let i = 0; i < rows.length; i += 100) {
-    const { error } = await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
-    if (error) console.warn('saveTracklist error:', error.message);
-  }
+  // Bug corrigé v2026.07.15 : plus de découpage par tranches de 100 (cf. sbUpsert) — un seul
+  // insert, quelle que soit la taille, contre le shim LocalDB.
+  const { error } = await window._sb.from('album_tracks').insert(rows);
+  if (error) console.warn('saveTracklist error:', error.message);
   albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
     .filter(t => t.source !== source).concat(tracks_);
 }
@@ -7346,10 +7405,9 @@ async function saveMusicBeeTracks(byKey) {
   if (!rows.length) return;
   try {
     await window._sb.from('musicbee_tracks').delete().neq('artist_norm', '___never___');
-    for (let i = 0; i < rows.length; i += 400) {
-      const { error } = await window._sb.from('musicbee_tracks').insert(rows.slice(i, i + 400));
-      if (error) console.warn('saveMusicBeeTracks chunk error:', error.message);
-    }
+    // Bug corrigé v2026.07.15 : plus de découpage par tranches de 400 (cf. sbUpsert).
+    const { error } = await window._sb.from('musicbee_tracks').insert(rows);
+    if (error) console.warn('saveMusicBeeTracks chunk error:', error.message);
     const byFolder = rows.reduce((acc, r) => { acc[r.folder] = (acc[r.folder]||0)+1; return acc; }, {});
     console.log(`musicbee_tracks : ${rows.length} pistes sauvegardées`, byFolder);
   } catch(e) { console.warn('saveMusicBeeTracks:', e); }
@@ -11755,9 +11813,8 @@ async function cleanupLastfmDuplicates() {
     if (Object.keys(_lastfmTrackCounts).length) {
       await window._sb.from('lastfm_tracks').delete().neq('artist', '___never___');
       const trackRows = Object.values(_lastfmTrackCounts).map(d => ({ artist: d.artist, track: d.track, album: d.album || '', plays: d.plays || 0 }));
-      for (let i = 0; i < trackRows.length; i += 400) {
-        await window._sb.from('lastfm_tracks').upsert(trackRows.slice(i, i + 400), { onConflict: 'artist,track,album' });
-      }
+      // Bug corrigé v2026.07.15 : plus de découpage par tranches de 400 (cf. sbUpsert).
+      await window._sb.from('lastfm_tracks').upsert(trackRows, { onConflict: 'artist,track,album' });
     }
     toast(`✓ last.fm nettoyé : ${removedAlbums} doublon(s) albums, ${removedTracks} doublon(s) morceaux fusionnés`);
   } catch (e) {
@@ -12674,6 +12731,11 @@ async function createSnapshot(label, payload) {
       label: label || 'Snapshot',
       data: finalPayload,
       counts: _snapshotCounts(finalPayload),
+      // Bug corrigé v2026.07.15 ("Invalid Date" dans le Journal) : sous le vrai Supabase, cette
+      // colonne avait `default now()` côté Postgres et se remplissait toute seule. Le shim LocalDB
+      // (IndexedDB) ne reproduit aucun défaut de colonne — created_at restait donc `undefined`,
+      // d'où l'"Invalid Date" affiché dans le sélecteur du Journal.
+      created_at: new Date().toISOString(),
     });
     if (error) throw error;
     await pruneOldSnapshots();
@@ -12999,8 +13061,13 @@ async function compareJournal() {
   const sel = document.getElementById('journal-snapshot-select');
   const status = document.getElementById('journal-status');
   const results = document.getElementById('journal-results');
-  const id = sel?.value;
-  if (!id) return;
+  const rawId = sel?.value;
+  if (!rawId) return;
+  // Bug corrigé v2026.07.15 ("Erreur : No rows found") : sel.value (attribut HTML <option value>)
+  // est TOUJOURS une chaîne, alors que collection_snapshots.id est un nombre côté LocalDB (shim
+  // IndexedDB) — celui-ci compare par égalité stricte (===), contrairement à Postgres qui aurait
+  // coercé "3" en 3 automatiquement. D'où l'échec systématique du .eq('id', id) ci-dessous.
+  const id = Number(rawId);
   status.textContent = 'Comparaison…';
   try {
     const { data, error } = await window._sb.from('collection_snapshots').select('created_at, label, data').eq('id', id).single();
