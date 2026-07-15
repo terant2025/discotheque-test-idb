@@ -2208,7 +2208,7 @@ const FILTER_PRESET_VIEWS = {
     selectId: 'filter-preset-select-wish',
     resetPage: false,
     renderFn: () => renderWishlist(),
-    fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio'],
+    fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio', 'filter-wish-sort'],
     noteOpPairs: []
   },
   rym: {
@@ -8828,6 +8828,10 @@ function wishFilteredList() {
   const sf   = document.getElementById('filter-wish-source')?.value || '';
   const pf   = document.getElementById('filter-wish-prio')?.value   || '';
   const yf   = (document.getElementById('filter-wish-year')?.value  || '').trim();
+  // Tri (demandé par Antoine) : date d'ajout / artiste / priorité (comportement historique,
+  // conservé comme valeur par défaut) / note MusicBee / compteur last.fm. Chaque option a un
+  // tri secondaire cohérent (le plus utile en cas d'égalité) plutôt qu'un ordre arbitraire.
+  const sortF = document.getElementById('filter-wish-sort')?.value || 'prio';
 
   return wishlist.filter(w => {
     return (!q    || (w.artist+' '+w.album).toLowerCase().includes(q))
@@ -8837,6 +8841,14 @@ function wishFilteredList() {
         && (!pf   || w.prio   === pf)
         && (!yf   || (w.year||'').startsWith(yf));
   }).sort((a, b) => {
+    if (sortF === 'date')   return (b.addedAt || '').localeCompare(a.addedAt || ''); // plus récent d'abord
+    if (sortF === 'artist') return a.artist.localeCompare(b.artist, 'fr') || a.album.localeCompare(b.album, 'fr');
+    if (sortF === 'mbnote') {
+      const na = wishOwnedMatch(a)?.note || 0, nb = wishOwnedMatch(b)?.note || 0;
+      return nb - na || wishPlays(b) - wishPlays(a);
+    }
+    if (sortF === 'plays')  return wishPlays(b) - wishPlays(a) || a.artist.localeCompare(b.artist, 'fr');
+    // 'prio' (défaut, comportement historique) : priorité d'abord, écoutes last.fm en tri secondaire.
     const po = { high: 0, mid: 1, low: 2 };
     if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
     return wishPlays(b) - wishPlays(a);
@@ -10226,6 +10238,7 @@ function resetStockFilters() {
 function resetWishlistFilters() {
   ['filter-wish-artist', 'filter-wish-album', 'filter-wish-year'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   ['filter-wish-source', 'filter-wish-prio'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const sortEl = document.getElementById('filter-wish-sort'); if (sortEl) sortEl.value = 'prio';
   renderWishlist();
 }
 
