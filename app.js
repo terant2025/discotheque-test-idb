@@ -3587,18 +3587,26 @@ function renderMissingTracks() {
     const albumBadge = albumInWishlist
       ? ' <span style="font-size:10px;color:var(--amber)" title="Cet album est dans la wishlist albums">🎯💿</span>'
       : '';
+    // Condensé (v2026.07.15) — Antoine : "pas super lisible". N'affiche plus la liste complète
+    // des tags Album concaténés (pouvait déborder sur plusieurs lignes) : seul le premier est
+    // montré, cliquable comme avant (filtre), le reste est résumé en badge "+N" avec la liste
+    // complète en infobulle plutôt que perdu — cliquer sur le badge filtre sur le 2e tag (le plus
+    // souvent suffisant pour distinguer), les suivants restent accessibles via le champ filtre.
+    const albumCell = !albumNames.length ? '–' :
+      `<span onclick="event.stopPropagation();filterMissingTracksByAlbum('${sid(albumNames[0])}')" style="cursor:pointer" title="Filtrer la liste sur cet album">${esc(albumNames[0])}</span>` +
+      (albumNames.length > 1 ? ` <span onclick="event.stopPropagation();filterMissingTracksByAlbum('${sid(albumNames[1])}')" style="cursor:pointer;color:var(--text3);font-size:10px" title="${esc(albumNames.slice(1).join(' · '))}">+${albumNames.length - 1}</span>` : '');
     return `<tr style="opacity:${isIgnored ? 0.45 : 1}">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-key="${sid(key)}" ${selectedMissingTrackKeys.has(key) ? 'checked' : ''} onchange="toggleMissingTrackSelected('${sid(key)}', this.checked)"></td>
     <td style="font-weight:500">${esc(d.track)}${stBadge}</td>
     <td style="color:var(--text2);font-size:13px"><span onclick="event.stopPropagation();filterMissingTracksByArtist('${sid(d.artist)}')" style="cursor:pointer" title="Filtrer la liste sur cet artiste">${esc(d.artist)}</span> <span onclick="event.stopPropagation();openArtistView('${sid(d.artist)}')" style="cursor:pointer;opacity:.5" title="Voir la Vue Artiste">👤</span></td>
-    <td style="color:var(--text3);font-size:12px">${albumNames.length ? albumNames.map(al => `<span onclick="event.stopPropagation();filterMissingTracksByAlbum('${sid(al)}')" style="cursor:pointer" title="Filtrer la liste sur cet album">${esc(al)}</span>`).join(' / ') : '–'}${albumBadge}</td>
+    <td style="color:var(--text3);font-size:12px">${albumCell}${albumBadge}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
-    <td style="display:flex;gap:3px;flex-wrap:wrap">
-      <button class="btn btn-sm ${isIgnored?'btn-danger':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
-      <button class="btn btn-sm ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau de la collection">🔗</button>
-      <button class="btn btn-sm ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
-      <button class="btn btn-sm btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋</button>
-      <button class="btn btn-sm" onclick="openYouTubeMusicSearch(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'))" title="Chercher sur YouTube Music">▶️</button>
+    <td style="display:flex;gap:2px;flex-wrap:nowrap;white-space:nowrap">
+      <button class="btn btn-xs btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋ Isolé</button>
+      <button class="btn btn-xs" onclick="openYouTubeMusicSearch(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'))" title="Chercher sur YouTube Music">▶️</button>
+      <button class="btn btn-xs ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau de la collection">🔗</button>
+      <button class="btn btn-xs ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
+      <button class="btn btn-xs ${isIgnored?'btn-danger':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
     </td>
   </tr>`;
   }).join('') + (list.length > 200 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
