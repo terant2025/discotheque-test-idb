@@ -8841,13 +8841,13 @@ function wishFilteredList() {
         && (!pf   || w.prio   === pf)
         && (!yf   || (w.year||'').startsWith(yf));
   }).sort((a, b) => {
-    if (sortF === 'date')   return (b.addedAt || '').localeCompare(a.addedAt || ''); // plus récent d'abord
-    if (sortF === 'artist') return a.artist.localeCompare(b.artist, 'fr') || a.album.localeCompare(b.album, 'fr');
+    if (sortF === 'date')   return String(b.addedAt || '').localeCompare(String(a.addedAt || '')); // plus récent d'abord
+    if (sortF === 'artist') return String(a.artist||'').localeCompare(String(b.artist||''), 'fr') || String(a.album||'').localeCompare(String(b.album||''), 'fr');
     if (sortF === 'mbnote') {
       const na = wishOwnedMatch(a)?.note || 0, nb = wishOwnedMatch(b)?.note || 0;
       return nb - na || wishPlays(b) - wishPlays(a);
     }
-    if (sortF === 'plays')  return wishPlays(b) - wishPlays(a) || a.artist.localeCompare(b.artist, 'fr');
+    if (sortF === 'plays')  return wishPlays(b) - wishPlays(a) || String(a.artist||'').localeCompare(String(b.artist||''), 'fr');
     // 'prio' (défaut, comportement historique) : priorité d'abord, écoutes last.fm en tri secondaire.
     const po = { high: 0, mid: 1, low: 2 };
     if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
