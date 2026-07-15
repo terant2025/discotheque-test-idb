@@ -99,6 +99,7 @@
 <!-- APP_VERSION: v2026.07.15-03 — 🎯 Tri de la Wishlist albums, demandé par Antoine. Nouveau menu déroulant "Tri : …" dans la barre d'outils (Date d'ajout ↓ / Artiste A→Z / Priorité / Note MB ↓ / Compteur last.fm ↓), remplace le tri fixe précédent (priorité puis écoutes last.fm, conservé comme option "Priorité" par défaut). wishFilteredList() centralise ce tri — exportWishlistCSV() en hérite automatiquement, sans changement. Champ inclus dans les préréglages de filtres enregistrés (💾) et réinitialisé par le bouton ↺. Wishlist morceaux (trackWishlist) non concernée : cette liste n'affiche ni note MB ni compteur last.fm. -->
 <!-- APP_VERSION: v2026.07.15-04 — 🐛 Hotfix suite à un crash remonté par Antoine en conditions réelles ("(intermediate value).localeCompare is not a function", tri "Artiste" de la Wishlist) : au moins une entrée de sa wishlist a un artist/album undefined (entrée historique/corrompue), et .localeCompare() plantait dessus sans passer par le garde-fou `(!af || …)` du filtre (lui protégé par court-circuit, contrairement au tri qui s'applique à TOUTES les entrées sans condition). Corrigé en coerçant systématiquement en string (String(a.artist||'')) avant chaque .localeCompare() dans wishFilteredList(), pour les tris "Artiste" et "Compteur last.fm" (tri secondaire) — même garde-fou que celui déjà en place pour .startsWith() sur w.year juste au-dessus. -->
 <!-- APP_VERSION: v2026.07.15-05 — 🎨 Lisibilité de "last.fm morceaux", signalé par Antoine ("c'est pas super lisible") avec capture montrant les 5 boutons d'action débordant sur 2 lignes (colonne Actions à 160px, insuffisante pour 5 .btn-sm). (1) Nouvelle classe CSS .btn-xs (padding réduit) + colonne Actions élargie à 210px + conteneur en nowrap : les 5 actions tiennent désormais sur une seule ligne. (2) Bouton "＋ Ajouter aux morceaux isolés" explicitement labellisé "＋ Isolé" (au lieu d'un simple "＋" ambigu) et repositionné en premier — seule action qui crée réellement une entrée dans la collection (morceaux isolés, pas d'import MB pour ceux-ci contrairement aux albums), les autres (🔗🎯🚫) ne font que qualifier/masquer une ligne last.fm sans rien ajouter à la collection. (3) Colonne Album condensée : n'affiche plus la liste complète des tags concaténés (source de débordement) mais seulement le 1er tag + badge "+N" cliquable (filtre sur le 2e), liste complète des autres en infobulle. -->
+<!-- APP_VERSION: v2026.07.15-06 — 🐛 Correction suite à clarification d'Antoine : "je ne veux pas ajouter via l'application des entrées dans la collection. seuls les imports Discogs et MusicBee sont la source, pas d'action manuelle". Le bouton "＋ Isolé" ajouté en -05 (et son équivalent en masse, ＋ Ajouter aux morceaux isolés) poussait directement dans `tracks` (morceaux isolés — une vraie donnée de collection), ce qui contredisait ce principe déjà respecté partout ailleurs dans l'app (aucun bouton "ajouter" manuel pour albums/morceaux, todo section confirmée). Les deux fonctions (addTrackFromMissingIdx, bulkAddMissingTracksToIsolated) et leurs boutons (ligne + barre d'actions groupées) supprimés. "last.fm morceaux" reste qualifiable (🚫 Ignorer / 🎯 Wishlist / 🔗 Associer à une entrée EXISTANTE) mais plus créable depuis cet écran — colonne Actions rétrécie à 130px (3 boutons au lieu de 5). -->
 
 
 
@@ -237,7 +238,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.15-05</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.15-06</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -760,7 +761,6 @@
         <span id="mtrack-bulk-count" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
         <button class="btn btn-sm" onclick="bulkSetMissingTrackStatus('ignored')" title="Ignorer les morceaux sélectionnés (ré-appliquer retire le statut)">🚫 Ignorer</button>
         <button class="btn btn-sm" onclick="bulkSetMissingTrackStatus('wishlist')" title="Ajouter les morceaux sélectionnés à la wishlist morceaux">🎯 Wishlist</button>
-        <button class="btn btn-sm btn-accent" onclick="bulkAddMissingTracksToIsolated()" title="Ajouter les morceaux sélectionnés aux morceaux isolés">＋ Ajouter aux morceaux isolés</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearMissingTrackSelection()">Annuler la sélection</button>
       </div>
@@ -773,7 +773,7 @@
               <th>Artiste</th>
               <th>Album</th>
               <th>Écoutes</th>
-              <th style="width:210px">Actions</th>
+              <th style="width:130px">Actions</th>
             </tr>
           </thead>
           <tbody id="mtrack-tbody"></tbody>

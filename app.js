@@ -3602,7 +3602,6 @@ function renderMissingTracks() {
     <td style="color:var(--text3);font-size:12px">${albumCell}${albumBadge}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
     <td style="display:flex;gap:2px;flex-wrap:nowrap;white-space:nowrap">
-      <button class="btn btn-xs btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋ Isolé</button>
       <button class="btn btn-xs" onclick="openYouTubeMusicSearch(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'))" title="Chercher sur YouTube Music">▶️</button>
       <button class="btn btn-xs ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau de la collection">🔗</button>
       <button class="btn btn-xs ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
@@ -3655,18 +3654,14 @@ function filterMissingTracksByAlbum(encodedAlbum) {
   renderMissingTracks();
 }
 
-function addTrackFromMissingIdx(idx) {
-  const d = renderMissingTracks._cache?.[idx];
-  if (!d) return;
-  if (tracks.find(t => normalizeKey(t.artist, t.title) === normalizeKey(d.artist, d.track))) {
-    toast('Déjà dans les morceaux isolés', 'warn'); return;
-  }
-  tracks.push({ id: uid(), title: d.track, artist: d.artist, album: d.album || '', format: 'mp3', duration: '', note: 0 });
-  invalidateCache();
-  saveToStorage();
-  renderMissingTracks();
-  toast(`Ajouté : ${d.artist} — ${d.track}`);
-}
+// addTrackFromMissingIdx()/bulkAddMissingTracksToIsolated() supprimées (v2026.07.15) : Antoine a
+// précisé que l'application ne doit JAMAIS créer d'entrée dans la collection manuellement — seuls
+// les imports Discogs (CSV) et MusicBee (XML) font foi. Ces deux fonctions poussaient directement
+// dans `tracks` (morceaux isolés, une vraie donnée de collection), ce qui contredisait ce principe
+// déjà en place ailleurs dans le fichier (aucun bouton "ajouter" manuel pour albums/morceaux). Les
+// morceaux manquants restent qualifiables (🚫 Ignorer / 🎯 Wishlist / 🔗 Associer à une entrée
+// EXISTANTE) mais plus créables depuis cet écran — pour les avoir en collection, réimporter depuis
+// MusicBee/Discogs comme pour toute autre entrée.
 
 // ── Sélection multiple & actions de masse (last.fm — Morceaux) ──────────────────────────
 // Demandé par Antoine : jusqu'ici chaque action (🚫 Ignorer, 🎯 Wishlist, ＋ Ajouter) ne
@@ -3743,22 +3738,8 @@ function bulkSetMissingTrackStatus(status) {
   toast(`${changed} morceau(x) ${label}`);
 }
 
-function bulkAddMissingTracksToIsolated() {
-  if (!selectedMissingTrackKeys.size) return;
-  const byKey = new Map(computeMissingTracks().map(d => [normalizeKey(d.artist, d.track), d]));
-  let added = 0, skipped = 0;
-  selectedMissingTrackKeys.forEach(key => {
-    const d = byKey.get(key);
-    if (!d) return;
-    if (tracks.find(t => normalizeKey(t.artist, t.title) === key)) { skipped++; return; }
-    tracks.push({ id: uid(), title: d.track, artist: d.artist, album: d.album || '', format: 'mp3', duration: '', note: 0 });
-    added++;
-  });
-  invalidateCache();
-  saveToStorage();
-  clearMissingTrackSelection();
-  toast(`${added} morceau(x) ajouté(s) aux morceaux isolés${skipped ? ` — ${skipped} déjà présent(s)` : ''}`);
-}
+// bulkAddMissingTracksToIsolated() supprimée (v2026.07.15) — voir commentaire plus haut
+// (addTrackFromMissingIdx). Aucune action de masse ne doit créer d'entrée de collection.
 
 // ── Statuts morceaux last.fm ─────────────────────────────────────────────────
 function setMissingTrackStatus(idx, status) {
