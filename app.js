@@ -3181,7 +3181,11 @@ function renderMissing() {
   const minP   = parseInt(document.getElementById('filter-missing-plays')?.value || '0') || 0;
   const statusF= document.getElementById('filter-missing-status')?.value || '';
   const genreF = (document.getElementById('filter-missing-genre')?.value  || '').toLowerCase().trim();
-  const rymF   = document.getElementById('filter-missing-rym')?.value || '';
+  // Filtre RYM à opérateur libre (demandé par Antoine : présent / absent / ≥ / ≤ / = / >),
+  // même convention que la Collection et la Discographie (filter-rym-note-op/val + matchNoteFilter)
+  // — remplace l'ancien select à seuils figés (5 / ≥4.5 / ≥4 / ≥3 / ≤2.5 / noté / non noté).
+  const rymOp  = document.getElementById('filter-missing-rym-op')?.value  || '';
+  const rymVal = document.getElementById('filter-missing-rym-val')?.value || '';
   const sortF  = document.getElementById('filter-missing-sort')?.value || 'plays';
  
   // Remplir le select genre une seule fois (genre récupéré via RYM, lastfmData n'en a pas)
@@ -3219,17 +3223,9 @@ function renderMissing() {
     if (albf && !m.album.toLowerCase().includes(albf)) return false;
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
-    const hasRymRating = (rymEntry?.rating || 0) > 0;
-		if (rymF === 'rym'   && !hasRymRating) return false;
-		if (rymF === 'norym' && hasRymRating)  return false;
-		const missingYearF = (document.getElementById('filter-missing-year')?.value || '').trim();
-		if (missingYearF && !(rymEntry?.year||'').startsWith(missingYearF)) return false;
-		if (rymF === 'low') {
-          if ((rymEntry?.rating || 0) === 0 || (rymEntry?.rating || 0) > 2.5) return false;
-        } else if (rymF && !isNaN(parseFloat(rymF))) {
-          const threshold = parseFloat(rymF);
-          if ((rymEntry?.rating || 0) < threshold) return false;
-        }
+    if (!matchNoteFilter(rymOp, rymVal, rymEntry?.rating || 0)) return false;
+    const missingYearF = (document.getElementById('filter-missing-year')?.value || '').trim();
+    if (missingYearF && !(rymEntry?.year||'').startsWith(missingYearF)) return false;
     return true;
   });
 
@@ -3284,7 +3280,9 @@ function renderMissing() {
       const div = document.createElement('div');
       div.className = 'missing-card';
       div.style.cssText = `padding:10px 14px;gap:10px;opacity:${st==='ignored'?0.5:1}`;
+      const key = normalizeKey(m.artist, m.album);
       div.innerHTML = `
+        <input type="checkbox" class="row-select-missing" data-key="${sid(key)}" ${selectedMissingAlbumKeys.has(key) ? 'checked' : ''} style="flex-shrink:0" onclick="event.stopPropagation()">
         <div class="missing-info" style="min-width:0;flex:1">
           <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)} ${stBadge}</div>
           <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
@@ -3307,6 +3305,85 @@ function renderMissing() {
   }
 
   requestAnimationFrame(renderChunk);
+}
+
+// ── Sélection multiple & actions de masse (last.fm — Albums) ────────────────────────────
+// Demandé par Antoine, même besoin que pour "last.fm morceaux" (v2026.07.12) : les actions
+// (🚫 Ignorer, 👂 À écouter, 🎯 Wishlist) ne s'appliquaient qu'à un album à la fois. Clé de
+// sélection = normalizeKey(artiste,album), pas un index de ligne — computeMissing()/le filtre
+// reconstruisent _missingListCache à chaque rendu, une clé texte survit à un changement de
+// filtre/tri entre deux sélections là où un index redeviendrait invalide. Contrairement à "last.fm
+// morceaux", pas d'action "＋ Ajouter" ici : ces boutons ne font que qualifier une ligne last.fm
+// (statut + wishlist, qui n'est pas la collection elle-même), rien ne crée d'entrée de collection —
+// cohérent avec le principe "seuls les imports Discogs/MusicBee font foi".
+let selectedMissingAlbumKeys = new Set();
+
+function renderMissingBulkBar() {
+  const n = selectedMissingAlbumKeys.size;
+  const bar = document.getElementById('missing-bulk-bar');
+  if (!bar) return;
+  const countEl = document.getElementById('missing-bulk-count');
+  if (countEl) countEl.textContent = n ? `${n} album${n > 1 ? 's' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
+  bar.style.display = n ? 'flex' : 'none';
+}
+
+function toggleSelectAllMissing(checked) {
+  const list = _missingListCache || [];
+  list.forEach(m => {
+    const key = normalizeKey(m.artist, m.album);
+    if (checked) selectedMissingAlbumKeys.add(key); else selectedMissingAlbumKeys.delete(key);
+  });
+  renderMissingBulkBar();
+  document.querySelectorAll('#missing-grid .row-select-missing').forEach(cb => { cb.checked = checked; });
+}
+
+function clearMissingSelection() {
+  selectedMissingAlbumKeys.clear();
+  const selAllCb = document.getElementById('select-all-missing');
+  if (selAllCb) selAllCb.checked = false;
+  renderMissingBulkBar();
+  renderMissing();
+}
+
+// Réutilise la même sémantique toggle que setLastfmStatusFromMissing (ré-appliquer le même statut
+// à un album qui l'a déjà = le retirer) — cohérent avec le comportement ligne par ligne. Manipule
+// directement _lastfmStatus/wishlist[] plutôt que d'appeler setLastfmStatus() en boucle (qui
+// re-render toute la grille à CHAQUE appel — coûteux sur une sélection de plusieurs centaines
+// d'albums), un seul renderMissing() est déclenché à la fin.
+function bulkSetMissingStatus(status) {
+  if (!selectedMissingAlbumKeys.size) return;
+  const byKey = new Map((_missingListCache || []).map(m => [normalizeKey(m.artist, m.album), m]));
+  let changed = 0, wishAdded = 0, wishRemoved = 0;
+  selectedMissingAlbumKeys.forEach(key => {
+    const m = byKey.get(key);
+    if (!m) return; // sélection issue d'un filtre différent, album plus dans la liste courante
+    const current = getLastfmStatus(m.artist, m.album);
+    const newStatus = current === status ? '' : status;
+    if (newStatus) _lastfmStatus[key] = newStatus; else delete _lastfmStatus[key];
+    if (newStatus === 'wishlist') {
+      if (!wishlist.find(w => normalizeKey(w.artist, w.album) === key)) {
+        addToWishlist(m.artist, m.album, '', 'lastfm', m.plays, 0, '');
+        wishAdded++;
+      }
+    } else if (current === 'wishlist') {
+      const before = wishlist.length;
+      wishlist = wishlist.filter(w => normalizeKey(w.artist, w.album) !== key);
+      if (wishlist.length !== before) wishRemoved++;
+    }
+    changed++;
+  });
+  if (window._sb) {
+    window._sb.from('meta').upsert({ key: 'lastfm_status', value: JSON.stringify(_lastfmStatus) }, { onConflict: 'key' }).then(() => {});
+  }
+  invalidateCache();
+  if (wishAdded || wishRemoved) updateNavBadges();
+  if (wishAdded || wishRemoved) saveToStorage();
+  clearMissingSelection();
+  const label = status === 'ignored'   ? 'ignoré(s)/réactivé(s)'
+              : status === 'to_listen' ? 'marqué(s) à écouter / retiré(s)'
+              : status === 'wishlist'  ? 'ajouté(s)/retiré(s) de la wishlist'
+              : status;
+  toast(`${changed} album(s) ${label}`);
 }
 
 // Cible courante de l'association last.fm
@@ -12097,6 +12174,17 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (action === 'wishlist')  setLastfmStatusWishlist(idx);
     else if (action === 'youtube')   { const m = _missingListCache[idx]; if(m) openYouTubeMusicSearch(m.artist, m.album); }
     else                             setLastfmStatusFromMissing(idx, action);
+  });
+  // Sélection multiple (cases à cocher par carte) — même délégation, événement 'change'
+  document.getElementById('missing-grid').addEventListener('change', function(e) {
+    const cb = e.target.closest('input.row-select-missing');
+    if (!cb) return;
+    const key = unsid(cb.dataset.key);
+    if (cb.checked) selectedMissingAlbumKeys.add(key); else selectedMissingAlbumKeys.delete(key);
+    renderMissingBulkBar();
+    const selAllCb = document.getElementById('select-all-missing');
+    if (selAllCb) selAllCb.checked = (_missingListCache || []).length > 0 &&
+      (_missingListCache || []).every(m => selectedMissingAlbumKeys.has(normalizeKey(m.artist, m.album)));
   });
 });
 

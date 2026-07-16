@@ -100,6 +100,7 @@
 <!-- APP_VERSION: v2026.07.15-04 — 🐛 Hotfix suite à un crash remonté par Antoine en conditions réelles ("(intermediate value).localeCompare is not a function", tri "Artiste" de la Wishlist) : au moins une entrée de sa wishlist a un artist/album undefined (entrée historique/corrompue), et .localeCompare() plantait dessus sans passer par le garde-fou `(!af || …)` du filtre (lui protégé par court-circuit, contrairement au tri qui s'applique à TOUTES les entrées sans condition). Corrigé en coerçant systématiquement en string (String(a.artist||'')) avant chaque .localeCompare() dans wishFilteredList(), pour les tris "Artiste" et "Compteur last.fm" (tri secondaire) — même garde-fou que celui déjà en place pour .startsWith() sur w.year juste au-dessus. -->
 <!-- APP_VERSION: v2026.07.15-05 — 🎨 Lisibilité de "last.fm morceaux", signalé par Antoine ("c'est pas super lisible") avec capture montrant les 5 boutons d'action débordant sur 2 lignes (colonne Actions à 160px, insuffisante pour 5 .btn-sm). (1) Nouvelle classe CSS .btn-xs (padding réduit) + colonne Actions élargie à 210px + conteneur en nowrap : les 5 actions tiennent désormais sur une seule ligne. (2) Bouton "＋ Ajouter aux morceaux isolés" explicitement labellisé "＋ Isolé" (au lieu d'un simple "＋" ambigu) et repositionné en premier — seule action qui crée réellement une entrée dans la collection (morceaux isolés, pas d'import MB pour ceux-ci contrairement aux albums), les autres (🔗🎯🚫) ne font que qualifier/masquer une ligne last.fm sans rien ajouter à la collection. (3) Colonne Album condensée : n'affiche plus la liste complète des tags concaténés (source de débordement) mais seulement le 1er tag + badge "+N" cliquable (filtre sur le 2e), liste complète des autres en infobulle. -->
 <!-- APP_VERSION: v2026.07.15-06 — 🐛 Correction suite à clarification d'Antoine : "je ne veux pas ajouter via l'application des entrées dans la collection. seuls les imports Discogs et MusicBee sont la source, pas d'action manuelle". Le bouton "＋ Isolé" ajouté en -05 (et son équivalent en masse, ＋ Ajouter aux morceaux isolés) poussait directement dans `tracks` (morceaux isolés — une vraie donnée de collection), ce qui contredisait ce principe déjà respecté partout ailleurs dans l'app (aucun bouton "ajouter" manuel pour albums/morceaux, todo section confirmée). Les deux fonctions (addTrackFromMissingIdx, bulkAddMissingTracksToIsolated) et leurs boutons (ligne + barre d'actions groupées) supprimés. "last.fm morceaux" reste qualifiable (🚫 Ignorer / 🎯 Wishlist / 🔗 Associer à une entrée EXISTANTE) mais plus créable depuis cet écran — colonne Actions rétrécie à 130px (3 boutons au lieu de 5). -->
+<!-- APP_VERSION: v2026.07.15-07 — 🎯 "last.fm albums" (sec-missing), demandé par Antoine. (1) Sélection multiple + actions de masse (🚫 Ignorer / 👂 À écouter / 🎯 Wishlist), même besoin déjà couvert sur "last.fm morceaux" (v2026.07.12-11) — case à cocher par carte (délégation d'événements, cohérent avec le clic des boutons existants), "Tout sélectionner" (résultats filtrés, pas de pagination sur cette vue contrairement aux morceaux), barre d'actions groupées. bulkSetMissingStatus() manipule directement _lastfmStatus/wishlist[] plutôt que d'appeler setLastfmStatus() en boucle (qui re-render toute la grille à chaque appel), pour rester rapide sur une sélection de plusieurs centaines d'albums. Volontairement PAS d'action de masse "ajouter" — ces 3 actions ne font que qualifier une ligne last.fm (statut + wishlist), aucune ne crée d'entrée de collection. (2) Filtre RYM à opérateur libre (présent / absent / ≥ / ≤ / = / >) remplaçant l'ancien select à seuils figés (5 / ≥4.5 / ≥4 / ≥3 / ≤2.5 / noté / non noté) — même convention que la Collection et la Discographie (filter-rym-note-op/val + matchNoteFilter(), réutilisés tels quels plutôt que réinventés). -->
 
 
 
@@ -238,7 +239,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.15-06</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.15-07</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -699,16 +700,19 @@
         <select id="filter-missing-genre" onchange="renderMissing()">
           <option value="">Tous genres</option>
         </select>
-        <select id="filter-missing-rym" onchange="renderMissing()">
-          <option value="">Note RYM</option>
-          <option value="5">RYM ★★★★★ (5)</option>
-          <option value="4.5">RYM ≥ 4.5</option>
-          <option value="4">RYM ≥ 4.0</option>
-          <option value="3">RYM ≥ 3.0</option>
-          <option value="low">RYM ≤ 2.5</option>
-          <option value="rym">Noté sur RYM</option>
-          <option value="norym">Non noté RYM</option>
-        </select>
+        <div class="note-filter" title="Note RYM">
+          <span class="note-filter-label">RYM</span>
+          <select id="filter-missing-rym-op" onchange="onNoteOpChange('filter-missing-rym-op','filter-missing-rym-val');renderMissing()">
+            <option value="">–</option>
+            <option value="gte">≥</option>
+            <option value="gt">></option>
+            <option value="eq">=</option>
+            <option value="lte">≤</option>
+            <option value="none">∅ Absent</option>
+            <option value="any">✓ Présent</option>
+          </select>
+          <input type="number" id="filter-missing-rym-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderMissing()" style="display:none">
+        </div>
         <input id="filter-missing-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <select id="filter-missing-sort" onchange="renderMissing()">
           <option value="plays">Tri : Écoutes ↓</option>
@@ -717,8 +721,19 @@
         </select>
         <div class="toolbar-right">
           <span id="missing-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);cursor:pointer">
+            <input type="checkbox" id="select-all-missing" onchange="toggleSelectAllMissing(this.checked)" title="Sélectionner tous les résultats filtrés"> Tout sélectionner
+          </label>
           <button class="btn btn-sm" onclick="exportMissingAlbumsCSV()">↓ CSV</button>
         </div>
+      </div>
+      <div id="missing-bulk-bar" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
+        <span id="missing-bulk-count" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
+        <button class="btn btn-sm" onclick="bulkSetMissingStatus('ignored')" title="Ignorer les albums sélectionnés (ré-appliquer retire le statut)">🚫 Ignorer</button>
+        <button class="btn btn-sm" onclick="bulkSetMissingStatus('to_listen')" title="Marquer les albums sélectionnés à écouter (ré-appliquer retire le statut)">👂 À écouter</button>
+        <button class="btn btn-sm" onclick="bulkSetMissingStatus('wishlist')" title="Ajouter les albums sélectionnés à la wishlist albums">🎯 Wishlist</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-sm" onclick="clearMissingSelection()">Annuler la sélection</button>
       </div>
       <div class="missing-grid" id="missing-grid"></div>
     </div>
