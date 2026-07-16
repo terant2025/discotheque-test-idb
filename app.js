@@ -1421,7 +1421,21 @@ async function loadFromSupabase() {
       }
     }
     setTimeout(() => updateLastSyncLabel(), 100);
-    loadAlbumTracks();
+    // Bug corrigé v2026.07.15 (signalé par Antoine : "le bitrate ne se met pas à jour
+    // correctement au réimport MusicBee, des morceaux remplacés continuent à ressortir en basse
+    // qualité") : ces deux appels n'étaient PAS attendus (ni l'un après l'autre, ni le fetch de
+    // chacun) — ils tournaient donc en CONCURRENCE. loadMusicBeeTracks() ne réinjecte les pistes
+    // d'un album dans albumTracksCache QUE s'il n'y trouve encore AUCUNE entrée source:'musicbee'
+    // (`hasMb`) — un filet de secours pour les albums dont album_tracks serait incomplet. Mais
+    // loadAlbumTracks() commence par un `albumTracksCache = {}` PUIS reconstruit progressivement
+    // depuis album_tracks (la source la plus à jour après un réimport XML) : si loadMusicBeeTracks()
+    // termine sa propre lecture AVANT que ce rebuild soit fini (ordre non garanti, dépend juste de
+    // la taille relative des deux tables ce jour-là), `hasMb` est trouvé à `false` pour un album
+    // pourtant déjà à jour, et une version issue de musicbee_tracks (qui peut avoir fini sa
+    // dernière sauvegarde en arrière-plan à un instant différent) écrase silencieusement le
+    // bitrate fraîchement réimporté. Un `await` explicite avant de lancer loadMusicBeeTracks()
+    // élimine la course : album_tracks a alors TOUJOURS fini de peupler le cache en premier.
+    await loadAlbumTracks();
     loadMusicBeeTracks();
     setTimeout(() => fetchMissingCovers(), 3000);
     nextId = Math.max(nextId, computeNextId());
