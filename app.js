@@ -3126,7 +3126,8 @@ function renderMissing() {
   const minP   = parseInt(document.getElementById('filter-missing-plays')?.value || '0') || 0;
   const statusF= document.getElementById('filter-missing-status')?.value || '';
   const genreF = (document.getElementById('filter-missing-genre')?.value  || '').toLowerCase().trim();
-  const rymF   = document.getElementById('filter-missing-rym')?.value || '';
+  const rymOp  = document.getElementById('filter-missing-rym-op')?.value || '';
+  const rymVal = document.getElementById('filter-missing-rym-val')?.value || '';
   const sortF  = document.getElementById('filter-missing-sort')?.value || 'plays';
  
   // Remplir le select genre une seule fois (genre récupéré via RYM, lastfmData n'en a pas)
@@ -3164,17 +3165,9 @@ function renderMissing() {
     if (albf && !m.album.toLowerCase().includes(albf)) return false;
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
-    const hasRymRating = (rymEntry?.rating || 0) > 0;
-		if (rymF === 'rym'   && !hasRymRating) return false;
-		if (rymF === 'norym' && hasRymRating)  return false;
-		const missingYearF = (document.getElementById('filter-missing-year')?.value || '').trim();
-		if (missingYearF && !(rymEntry?.year||'').startsWith(missingYearF)) return false;
-		if (rymF === 'low') {
-          if ((rymEntry?.rating || 0) === 0 || (rymEntry?.rating || 0) > 2.5) return false;
-        } else if (rymF && !isNaN(parseFloat(rymF))) {
-          const threshold = parseFloat(rymF);
-          if ((rymEntry?.rating || 0) < threshold) return false;
-        }
+    if (!matchNoteFilter(rymOp, rymVal, rymEntry?.rating || 0)) return false;
+    const missingYearF = (document.getElementById('filter-missing-year')?.value || '').trim();
+    if (missingYearF && !(rymEntry?.year||'').startsWith(missingYearF)) return false;
     return true;
   });
 
@@ -3183,6 +3176,9 @@ function renderMissing() {
   else if (sortF === 'plays') filtered.sort((a,b) => (b.plays||0) - (a.plays||0));
 
   _missingListCache = filtered;
+  const selAllMissingCb = document.getElementById('select-all-missing');
+  if (selAllMissingCb) selAllMissingCb.checked = filtered.length > 0 && filtered.every(m => selectedMissingKeys.has(normalizeKey(m.artist, m.album)));
+  renderMissingBulkBar();
 
   const ctr = document.getElementById('missing-counter');
   if (ctr) ctr.textContent = filtered.length + ' / ' + list.length + ' manquants';
@@ -3229,7 +3225,9 @@ function renderMissing() {
       const div = document.createElement('div');
       div.className = 'missing-card';
       div.style.cssText = `padding:10px 14px;gap:10px;opacity:${st==='ignored'?0.5:1}`;
+      const mKey = normalizeKey(m.artist, m.album);
       div.innerHTML = `
+        <div onclick="event.stopPropagation()" style="display:flex;align-items:center"><input type="checkbox" class="row-select" data-key="${sid(mKey)}" ${selectedMissingKeys.has(mKey) ? 'checked' : ''} onchange="toggleMissingSelected('${sid(mKey)}', this.checked)"></div>
         <div class="missing-info" style="min-width:0;flex:1">
           <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)} ${stBadge}</div>
           <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
@@ -3252,6 +3250,69 @@ function renderMissing() {
   }
 
   requestAnimationFrame(renderChunk);
+}
+
+// ── Sélection multiple & actions de masse (last.fm — Albums) ────────────────────────────
+// Demandé par Antoine, même moule que la sélection multiple déjà en place sur "last.fm —
+// Morceaux" (v2026.07.12-11) : clé de sélection = normalizeKey(artiste,album) plutôt qu'un id
+// ou un index de ligne — computeMissing() reconstruit sa liste à chaque appel (pas d'id
+// stable), et la clé texte survit aux changements de filtre/tri entre deux sélections,
+// contrairement à un index qui redevient invalide dès qu'on retrie/filtre. 🔗 Associer et ▶️
+// YouTube restent volontairement individuels (modale/recherche par album, non batchables),
+// comme sur l'onglet Morceaux.
+let selectedMissingKeys = new Set();
+
+function toggleMissingSelected(keySid, checked) {
+  const key = unsid(keySid);
+  if (checked) selectedMissingKeys.add(key); else selectedMissingKeys.delete(key);
+  renderMissingBulkBar();
+  const selAllCb = document.getElementById('select-all-missing');
+  if (selAllCb) {
+    const list = _missingListCache || [];
+    selAllCb.checked = list.length > 0 && list.every(m => selectedMissingKeys.has(normalizeKey(m.artist, m.album)));
+  }
+}
+
+function toggleSelectAllMissing(checked) {
+  const list = _missingListCache || [];
+  list.forEach(m => {
+    const key = normalizeKey(m.artist, m.album);
+    if (checked) selectedMissingKeys.add(key); else selectedMissingKeys.delete(key);
+  });
+  renderMissingBulkBar();
+  document.querySelectorAll('#missing-grid .row-select').forEach(cb => { cb.checked = checked; });
+}
+
+function clearMissingSelection() {
+  selectedMissingKeys.clear();
+  renderMissing();
+}
+
+function renderMissingBulkBar() {
+  const n = selectedMissingKeys.size;
+  const bar = document.getElementById('missing-bulk-bar');
+  if (!bar) return;
+  const countEl = document.getElementById('missing-bulk-count');
+  if (countEl) countEl.textContent = n ? `${n} album${n > 1 ? 's' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
+  bar.style.display = n ? 'flex' : 'none';
+}
+
+// Réutilise la même sémantique toggle que setLastfmStatusFromMissing (ré-appliquer le même
+// statut à un album qui l'a déjà = le retirer) — cohérent avec le comportement ligne par ligne.
+function bulkSetMissingStatus(status) {
+  if (!selectedMissingKeys.size) return;
+  const byKey = new Map(computeMissing().map(m => [normalizeKey(m.artist, m.album), m]));
+  let changed = 0;
+  selectedMissingKeys.forEach(key => {
+    const m = byKey.get(key);
+    if (!m) return; // sélection issue d'un filtre différent, album plus dans la liste courante
+    const current = getLastfmStatus(m.artist, m.album);
+    setLastfmStatus(m.artist, m.album, current === status ? '' : status);
+    changed++;
+  });
+  clearMissingSelection();
+  const label = status === 'ignored' ? 'ignoré(s)/réactivé(s)' : status === 'wishlist' ? 'ajouté(s)/retiré(s) de la wishlist' : status === 'to_listen' ? 'marqué(s)/retiré(s) "à écouter"' : status;
+  toast(`${changed} album(s) ${label}`);
 }
 
 // Cible courante de l'association last.fm
