@@ -94,14 +94,11 @@
 <!-- APP_VERSION: v2026.07.13-18 — ⭐ Note MB ajoutée à l'onglet "Basse qualité" (Titres), demandé par Antoine. Colonne "Note MB" (étoiles) affichée dans le tableau et incluse dans l'export CSV (note_mb) — rating pour les pistes d'albums (via albumTracksCache), note pour les morceaux isolés (deux champs différents mais même échelle 0-5, déjà utilisés ainsi partout ailleurs dans le fichier). -->
 <!-- APP_VERSION: v2026.07.13-19 — ☑️ Filtre "Uniquement les morceaux notés" dans l'onglet "Basse qualité" (Titres), demandé par Antoine. Case à cocher au-dessus du tableau, filtre sur note > 0 (le champ ajouté en -18) — respecté aussi par l'export CSV, pour rester cohérent avec ce qui est affiché à l'écran. -->
 <!-- APP_VERSION: v2026.07.13-20 — ☑️ Filtre "Uniquement les morceaux isolés" dans l'onglet "Basse qualité" (Titres), demandé par Antoine ("un filtre sur les morceaux isolés dans top titres" — interprété comme continuant sur cet onglet, puisque "Titres" y mélange pistes d'albums et morceaux isolés depuis v2026.07.13-16 ; à ajuster si ce n'était pas le bon endroit). Chaque ligne de computeLowQualityTracks() porte désormais un flag `isolated` (true pour les morceaux du tableau `tracks`, false pour les pistes d'albums via albumTracksCache) ; nouvelle case à cocher filtrant dessus, combinable avec "Uniquement les morceaux notés" existante, respectée aussi par l'export CSV. -->
-<!-- APP_VERSION: v2026.07.15-01 — 🐛 Deux bugs signalés par Antoine après la migration IndexedDB (Phase 1). (1) "Sync qui ne s'arrête jamais" — sbUpsert() et 6 autres endroits (flushTrackCountsToSupabase, flushAlbumCountsToSupabase, saveTracklist, saveMusicBeeTracks, purge des albums supprimés, enrichissement mb_release_id) découpaient leurs upserts/delete en tranches de 100-400 lignes, protection héritée de Supabase réseau (limite de payload HTTP) devenue contre-productive contre le shim LocalDB : CHAQUE tranche réécrivait l'INTÉGRALITÉ de la table sur IndexedDB, jusqu'à ~290 réécritures complètes pour lastfm_tracks (116 334 lignes chez Antoine) par flush. Mesuré (Node + fake-indexeddb) : 8.9s en tranches de 400 vs 0.2s en un seul appel sur une table de 37 922 lignes. Le pire cas (enrichissement mb_release_id) faisait une réécriture complète PAR ALBUM via des .update().eq('id') individuels — remplacé par un upsert groupé unique. Toutes les tranches supprimées : un seul appel, quelle que soit la taille, contre le stockage local. LocalDB._persist() réécrite pour différer/regrouper (debounce 40ms) les écritures IndexedDB réelles, avec flush forcé sur `beforeunload`. (2) Journal (Import/Export) affichait "Invalid Date" et "Erreur : No rows found" — collection_snapshots.created_at reposait sur `default now()` côté Postgres, jamais reproduit par le shim LocalDB (désormais stampé explicitement dans createSnapshot()) ; compareJournal() comparait un id de table (number) à sel.value (toujours string en HTML), échouant sur l'égalité stricte du shim — corrigé via Number(id). -->
-<!-- APP_VERSION: v2026.07.15-02 — 🎵 last.fm morceaux (missing tracks), demandé par Antoine : (1) bouton "✕ Filtres" dans la barre d'outils réinitialisant en un clic les 6 filtres propres à cette liste (artiste/titre/album/écoutes/tri/statut) — ne touche pas la recherche globale, partagée avec les autres écrans. (2) Clic sur un nom d'artiste ou d'album dans le tableau → remplit le champ de filtre correspondant et relance la liste, au lieu de devoir le retaper à la main ; combinable avec les autres filtres actifs. Le lien existant "Vue Artiste" sur le nom d'artiste est conservé, déplacé sur une petite icône 👤 séparée à côté du nom pour ne pas entrer en conflit avec le nouveau clic-filtre. Un morceau ayant plusieurs tags Album consolidés (d.album, ex. "A / B") affiche chaque album cliquable séparément. -->
-<!-- APP_VERSION: v2026.07.15-03 — 🎯 Tri de la Wishlist albums, demandé par Antoine. Nouveau menu déroulant "Tri : …" dans la barre d'outils (Date d'ajout ↓ / Artiste A→Z / Priorité / Note MB ↓ / Compteur last.fm ↓), remplace le tri fixe précédent (priorité puis écoutes last.fm, conservé comme option "Priorité" par défaut). wishFilteredList() centralise ce tri — exportWishlistCSV() en hérite automatiquement, sans changement. Champ inclus dans les préréglages de filtres enregistrés (💾) et réinitialisé par le bouton ↺. Wishlist morceaux (trackWishlist) non concernée : cette liste n'affiche ni note MB ni compteur last.fm. -->
-<!-- APP_VERSION: v2026.07.15-04 — 🐛 Hotfix suite à un crash remonté par Antoine en conditions réelles ("(intermediate value).localeCompare is not a function", tri "Artiste" de la Wishlist) : au moins une entrée de sa wishlist a un artist/album undefined (entrée historique/corrompue), et .localeCompare() plantait dessus sans passer par le garde-fou `(!af || …)` du filtre (lui protégé par court-circuit, contrairement au tri qui s'applique à TOUTES les entrées sans condition). Corrigé en coerçant systématiquement en string (String(a.artist||'')) avant chaque .localeCompare() dans wishFilteredList(), pour les tris "Artiste" et "Compteur last.fm" (tri secondaire) — même garde-fou que celui déjà en place pour .startsWith() sur w.year juste au-dessus. -->
-<!-- APP_VERSION: v2026.07.15-05 — 🎨 Lisibilité de "last.fm morceaux", signalé par Antoine ("c'est pas super lisible") avec capture montrant les 5 boutons d'action débordant sur 2 lignes (colonne Actions à 160px, insuffisante pour 5 .btn-sm). (1) Nouvelle classe CSS .btn-xs (padding réduit) + colonne Actions élargie à 210px + conteneur en nowrap : les 5 actions tiennent désormais sur une seule ligne. (2) Bouton "＋ Ajouter aux morceaux isolés" explicitement labellisé "＋ Isolé" (au lieu d'un simple "＋" ambigu) et repositionné en premier — seule action qui crée réellement une entrée dans la collection (morceaux isolés, pas d'import MB pour ceux-ci contrairement aux albums), les autres (🔗🎯🚫) ne font que qualifier/masquer une ligne last.fm sans rien ajouter à la collection. (3) Colonne Album condensée : n'affiche plus la liste complète des tags concaténés (source de débordement) mais seulement le 1er tag + badge "+N" cliquable (filtre sur le 2e), liste complète des autres en infobulle. -->
-<!-- APP_VERSION: v2026.07.15-06 — 🐛 Correction suite à clarification d'Antoine : "je ne veux pas ajouter via l'application des entrées dans la collection. seuls les imports Discogs et MusicBee sont la source, pas d'action manuelle". Le bouton "＋ Isolé" ajouté en -05 (et son équivalent en masse, ＋ Ajouter aux morceaux isolés) poussait directement dans `tracks` (morceaux isolés — une vraie donnée de collection), ce qui contredisait ce principe déjà respecté partout ailleurs dans l'app (aucun bouton "ajouter" manuel pour albums/morceaux, todo section confirmée). Les deux fonctions (addTrackFromMissingIdx, bulkAddMissingTracksToIsolated) et leurs boutons (ligne + barre d'actions groupées) supprimés. "last.fm morceaux" reste qualifiable (🚫 Ignorer / 🎯 Wishlist / 🔗 Associer à une entrée EXISTANTE) mais plus créable depuis cet écran — colonne Actions rétrécie à 130px (3 boutons au lieu de 5). -->
-<!-- APP_VERSION: v2026.07.15-07 — 🎯 "last.fm albums" (sec-missing), demandé par Antoine. (1) Sélection multiple + actions de masse (🚫 Ignorer / 👂 À écouter / 🎯 Wishlist), même besoin déjà couvert sur "last.fm morceaux" (v2026.07.12-11) — case à cocher par carte (délégation d'événements, cohérent avec le clic des boutons existants), "Tout sélectionner" (résultats filtrés, pas de pagination sur cette vue contrairement aux morceaux), barre d'actions groupées. bulkSetMissingStatus() manipule directement _lastfmStatus/wishlist[] plutôt que d'appeler setLastfmStatus() en boucle (qui re-render toute la grille à chaque appel), pour rester rapide sur une sélection de plusieurs centaines d'albums. Volontairement PAS d'action de masse "ajouter" — ces 3 actions ne font que qualifier une ligne last.fm (statut + wishlist), aucune ne crée d'entrée de collection. (2) Filtre RYM à opérateur libre (présent / absent / ≥ / ≤ / = / >) remplaçant l'ancien select à seuils figés (5 / ≥4.5 / ≥4 / ≥3 / ≤2.5 / noté / non noté) — même convention que la Collection et la Discographie (filter-rym-note-op/val + matchNoteFilter(), réutilisés tels quels plutôt que réinventés). -->
-<!-- APP_VERSION: v2026.07.15-08 — 🐛 Bitrate pas à jour après réimport MusicBee (Basse qualité), signalé par Antoine. Cause identifiée : au démarrage (loadLocalCollection), loadAlbumTracks() et loadMusicBeeTracks() étaient appelées SANS await, donc en concurrence. loadMusicBeeTracks() ne réinjecte les pistes d'un album dans albumTracksCache QUE si elle n'y trouve encore aucune entrée source:'musicbee' (filet de secours pour les albums dont album_tracks serait incomplet) — mais loadAlbumTracks() commence par un albumTracksCache={} PUIS reconstruit depuis album_tracks (la source la plus à jour après un réimport XML) : sans ordre garanti entre les deux, ce filet de secours pouvait se déclencher à tort et écraser silencieusement le bitrate fraîchement réimporté par une version issue de musicbee_tracks pas nécessairement à jour au même instant. await loadAlbumTracks() ajouté avant l'appel à loadMusicBeeTracks() — les 2 autres call sites (migrateSupabaseToIndexedDB, chargement one-shot) faisaient déjà les 2 appels dans cet ordre avec await, seul le chemin de démarrage normal en manquait. Reproduit et vérifié en isolant les deux fonctions (Node, délais asymétriques simulés). Pistes d'albums en mémoire pendant une MÊME session (sans fermer l'onglet) non concernées par ce bug précis, déjà correctes immédiatement après un réimport — à confirmer avec Antoine si le souci se manifeste aussi sans fermeture d'onglet entre-temps. -->
+<!-- APP_VERSION: v2026.07.25-01 — 🐛 BUG CORRIGÉ — MBID trouvé dans l'app (recherche manuelle "🔍 MusicBrainz" ou "🪄 Auto-matcher") perdu au réimport XML MusicBee suivant. Root cause : le XML ne porte un MBID que si Picard/MusicBee l'a lui-même taggé sur le fichier ; un MBID trouvé côté app ne vit que sur l'objet en mémoire/IndexedDB, jamais réécrit dans la bibliothèque MusicBee. Or importMusicBeeXML() fait un REMPLACEMENT COMPLET des morceaux isolés (`tracks = isolatedTracks.map(...)`) et des pistes 'musicbee' de chaque album dans albumTracksCache (importMusicBeeTracklists) à chaque réimport — seule la note était explicitement reportée depuis l'existant (existingTrackNotes), pas le MBID. Corrigé sur le même principe pour les deux chemins : morceaux isolés (map existingTrackMbids par normalizeKey(artist,title) avant remplacement) et pistes de tracklist d'album (map existingMbidByTitle par titre normalisé, appliquée à g.tracks avant le filter/concat qui écrase les pistes 'musicbee'). Le MBID du XML reste prioritaire quand il est présent (aucun changement de ce comportement) — seul le cas "XML vide, app pleine" est désormais préservé. ⚠️ Aucune migration nécessaire ; effectif dès le prochain réimport XML (les données déjà en base ne sont pas rétroactivement affectées, seul le prochain import bénéficie du correctif). -->
+<!-- APP_VERSION: v2026.07.25-02 — Export offline Android : refonte des filtres et nouvelle rubrique Wishlist. Demandé par Antoine. (1) CD vs Numérique : le sélecteur formats et les badges ne distinguent plus FLAC/MP3/Digital (fusionnés en un seul badge/filtre "🖥 Numérique"), seule la distinction CD / Numérique subsiste. (2) 3 champs de recherche distincts (Artiste, Album, Année) remplacent le champ combiné unique. (3) Nouvelle rubrique "🎯 Wishlist" (kind:'wishlist') : le tableau `wishlist` de l'app est désormais inclus dans l'export offline (jusqu'ici absent), avec son propre filtre statut et un style de carte dédié (bordure accent). (4) Cases à cocher "Inclure RYM"/"Inclure last.fm" pour la rubrique "🔭 Découvertes" (ex-"Hors collection") : computeOutOfCollectionEntries() trace désormais fromRym/fromLastfm par entrée (une entrée notée sur RYM ET scrobblée sur last.fm porte les deux flags, jamais perdue si une seule des deux cases est cochée). Le flag outOfCollection est remplacé partout par un champ kind:'owned'|'discover'|'wishlist', plus extensible. -->
+<!-- APP_VERSION: v2026.07.25-03 — Valeur estimée Discogs dans Discographie + Vendre, détection des liens Discogs cassés. Demandé par Antoine : "je voudrais que la discographie fasse apparaître la valeur estimée discogs, notamment les articles dans la liste vente, je veux identifier les articles sans estimation pour vérifier que le lien discogs n'est pas erroné". Nouvelle colonne "Valeur DC" (discogsValueCell(), partagée) dans Discographie ET l'onglet Vendre (qui n'affichait jusqu'ici aucune donnée de valorisation) : montant si a.marketplace_price connu, badge cliquable "⚠️ Sans estimation" si discogsId présent mais jamais estimé (déclenche fetchSingleMarketplaceEstimate() — un fetch immédiat pour cet album précis, feedback direct en cas d'échec avec l'ID en cause, permet de confirmer tout de suite si le discogsId est cassé sans attendre le prochain passage du batch général), "–" neutre si pas de discogsId du tout. 2 nouveaux filtres dans le sélecteur Discographie : "💸 À vendre" (les articles forSale étaient jusqu'ici entièrement exclus de la vue Discographie — invisibles, donc leur valeur ne s'y voyait jamais) et "⚠️ Sans estimation Discogs" (tout CD avec discogsId et sans marketplace_price, à vendre ou non, pour l'audit demandé). Export CSV (Discographie + Vendre) mis à jour avec la colonne Valeur DC en conséquence. -->
+<!-- APP_VERSION: v2026.07.25-04 — Prix Discogs dans l'export offline, estimation en masse pour Ok + Wishlist. Demandé par Antoine : "est-ce qu'on pourrait inclure les prix dans l'export html, aller chercher les prix mini haut médian discogs pour tous les albums dans OK et wishlist". Clarifié avec Antoine au préalable : l'API Discogs officielle documentée n'expose que le prix le plus bas (/marketplace/stats, lowest_price/num_for_sale) — le "Low/Median/High" des pages Discogs.com vient de l'historique des ventes, une fonctionnalité web only non exposée par l'API (confirmé par le staff Discogs sur leur propre forum) ; décision d'Antoine : rester sur le prix le plus bas officiel plutôt que l'endpoint non documenté /marketplace/search. Nouveau : fetchOkMarketplaceStats() (bouton dédié dans l'onglet Ok, même fonction/cadence que le batch général de Valeur collection mais scopé aux CD du dossier Ok) et fetchWishlistMarketplaceEstimates() (bouton dédié Wishlist, décision d'Antoine : recherche automatique par artiste/album via searchDiscogs() — même branche Edge Function "discogs_search" que "IDs manquants" — puis fetchMarketplaceStats() sur le 1er résultat ; approximatif, pressage non garanti, marqué marketplace_price_approx et affiché avec un préfixe "≈" partout où le prix apparaît, wishlistValueCell() dédiée en plus de discogsValueCell()). Colonne "Valeur DC" ajoutée aux onglets Ok et Wishlist (+ export CSV des deux). Export offline Android : nouveaux champs price/priceCurrency/priceApprox sur les entrées owned et wishlist (pas sur discover, qui n'a pas de discogsId), nouveau badge "💰" (préfixé "≈" si approximatif) et tri "Tri : Prix". -->
+<!-- APP_VERSION: v2026.07.25-05 — Estimation Discogs automatique après import CSV Discogs. Demandé par Antoine ("est-ce que l'import discogs pourrait provoquer une mise à jour des prix ?"), clarifié au préalable : incrémental uniquement (les CD nouvellement importés sans prix), jamais de rafraîchissement des prix déjà connus. importDiscogs() chaîne désormais fetchAllMarketplaceStats() après le fetch des tracklists existant (setTimeout 1500ms), l'un après l'autre plutôt qu'en parallèle pour ne pas faire cohabiter deux boucles pacées à 700ms sur la même API Discogs en même temps. fetchAllMarketplaceStats() ciblait déjà uniquement a.marketplace_price == null (aucun changement de logique nécessaire côté ciblage) — juste le nouveau point d'appel automatique. -->
 
 
 
@@ -240,7 +237,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.15-08</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.07.25-05</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -480,6 +477,8 @@
           <option value="missing">⚠️ Sans sauvegarde numérique</option>
           <option value="ok">✅ Sauvegardés</option>
           <option value="no-cd">🔵 Numériques sans CD</option>
+          <option value="vendre">💸 À vendre</option>
+          <option value="no-estimate">⚠️ Sans estimation Discogs</option>
         </select>
         <select id="disco-filter-type" onchange="renderDiscographie()">
           <option value="">Tous types</option>
@@ -588,6 +587,7 @@
               <th>Note MB</th>
               <th>Note DC</th>
               <th>Note RYM</th>
+              <th>Valeur DC</th>
               <th>Écoutes</th>
               <th style="width:120px"></th>
             </tr>
@@ -701,19 +701,16 @@
         <select id="filter-missing-genre" onchange="renderMissing()">
           <option value="">Tous genres</option>
         </select>
-        <div class="note-filter" title="Note RYM">
-          <span class="note-filter-label">RYM</span>
-          <select id="filter-missing-rym-op" onchange="onNoteOpChange('filter-missing-rym-op','filter-missing-rym-val');renderMissing()">
-            <option value="">–</option>
-            <option value="gte">≥</option>
-            <option value="gt">></option>
-            <option value="eq">=</option>
-            <option value="lte">≤</option>
-            <option value="none">∅ Absent</option>
-            <option value="any">✓ Présent</option>
-          </select>
-          <input type="number" id="filter-missing-rym-val" min="0" max="5" step="0.5" placeholder="–" oninput="renderMissing()" style="display:none">
-        </div>
+        <select id="filter-missing-rym" onchange="renderMissing()">
+          <option value="">Note RYM</option>
+          <option value="5">RYM ★★★★★ (5)</option>
+          <option value="4.5">RYM ≥ 4.5</option>
+          <option value="4">RYM ≥ 4.0</option>
+          <option value="3">RYM ≥ 3.0</option>
+          <option value="low">RYM ≤ 2.5</option>
+          <option value="rym">Noté sur RYM</option>
+          <option value="norym">Non noté RYM</option>
+        </select>
         <input id="filter-missing-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
         <select id="filter-missing-sort" onchange="renderMissing()">
           <option value="plays">Tri : Écoutes ↓</option>
@@ -722,19 +719,8 @@
         </select>
         <div class="toolbar-right">
           <span id="missing-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
-          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);cursor:pointer">
-            <input type="checkbox" id="select-all-missing" onchange="toggleSelectAllMissing(this.checked)" title="Sélectionner tous les résultats filtrés"> Tout sélectionner
-          </label>
           <button class="btn btn-sm" onclick="exportMissingAlbumsCSV()">↓ CSV</button>
         </div>
-      </div>
-      <div id="missing-bulk-bar" style="display:none;align-items:center;gap:8px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">
-        <span id="missing-bulk-count" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
-        <button class="btn btn-sm" onclick="bulkSetMissingStatus('ignored')" title="Ignorer les albums sélectionnés (ré-appliquer retire le statut)">🚫 Ignorer</button>
-        <button class="btn btn-sm" onclick="bulkSetMissingStatus('to_listen')" title="Marquer les albums sélectionnés à écouter (ré-appliquer retire le statut)">👂 À écouter</button>
-        <button class="btn btn-sm" onclick="bulkSetMissingStatus('wishlist')" title="Ajouter les albums sélectionnés à la wishlist albums">🎯 Wishlist</button>
-        <div style="flex:1"></div>
-        <button class="btn btn-sm" onclick="clearMissingSelection()">Annuler la sélection</button>
       </div>
       <div class="missing-grid" id="missing-grid"></div>
     </div>
@@ -769,7 +755,6 @@
         </select>
         <div class="toolbar-right">
           <span id="mtrack-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
-          <button class="btn btn-sm" onclick="clearMissingTracksFilters()" title="Réinitialiser tous les filtres de cette liste">✕ Filtres</button>
           <button class="btn btn-sm" onclick="exportMissingTracksCSV()" title="Exporter CSV">⬇ CSV</button>
         </div>
       </div>
@@ -777,6 +762,7 @@
         <span id="mtrack-bulk-count" style="font-size:12px;color:var(--text2);font-family:var(--mono)"></span>
         <button class="btn btn-sm" onclick="bulkSetMissingTrackStatus('ignored')" title="Ignorer les morceaux sélectionnés (ré-appliquer retire le statut)">🚫 Ignorer</button>
         <button class="btn btn-sm" onclick="bulkSetMissingTrackStatus('wishlist')" title="Ajouter les morceaux sélectionnés à la wishlist morceaux">🎯 Wishlist</button>
+        <button class="btn btn-sm btn-accent" onclick="bulkAddMissingTracksToIsolated()" title="Ajouter les morceaux sélectionnés aux morceaux isolés">＋ Ajouter aux morceaux isolés</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearMissingTrackSelection()">Annuler la sélection</button>
       </div>
@@ -789,7 +775,7 @@
               <th>Artiste</th>
               <th>Album</th>
               <th>Écoutes</th>
-              <th style="width:130px">Actions</th>
+              <th style="width:160px">Actions</th>
             </tr>
           </thead>
           <tbody id="mtrack-tbody"></tbody>
@@ -894,13 +880,6 @@
           <option value="mid">🟡 Moyenne</option>
           <option value="low">🟢 Basse</option>
         </select>
-        <select id="filter-wish-sort" onchange="renderWishlist()" title="Trier la liste">
-          <option value="prio">Tri : Priorité</option>
-          <option value="date">Tri : Date d'ajout ↓</option>
-          <option value="artist">Tri : Artiste A→Z</option>
-          <option value="mbnote">Tri : Note MB ↓</option>
-          <option value="plays">Tri : Compteur last.fm ↓</option>
-        </select>
         <select id="filter-preset-select-wish" onchange="applyFilterPreset('wishlist')" title="Charger un préréglage de filtres enregistré">
           <option value="">💾 Filtres…</option>
         </select>
@@ -909,6 +888,8 @@
         <button class="btn btn-sm" onclick="resetWishlistFilters()" title="Réinitialiser les filtres">↺</button>
         <div class="toolbar-right">
           <span id="wish-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" id="wish-price-fetch-btn" onclick="fetchWishlistMarketplaceEstimates()" title="Cherche un release Discogs correspondant et récupère son prix le plus bas — correspondance approximative (pressage non garanti), signalée par ≈">🔄 Estimer prix Discogs</button>
+          <span id="wish-price-fetch-status" style="font-size:11px;color:var(--text3)"></span>
           <button class="btn btn-sm" onclick="exportWishlistCSV()" title="Exporter CSV">⬇ CSV</button>
         </div>
       </div>
@@ -936,6 +917,7 @@
               <th>Note MB</th>
               <th>Note DC</th>
               <th>Note RYM</th>
+              <th>Valeur DC</th>
               <th style="width:90px">Ajouté le</th>
               <th style="width:120px"></th>
             </tr>
@@ -1002,11 +984,13 @@
         </select>
         <div class="toolbar-right">
           <span id="ok-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+          <button class="btn btn-sm" id="ok-price-fetch-btn" onclick="fetchOkMarketplaceStats()" title="Récupère le prix Discogs le plus bas pour les CD Ok pas encore estimés">🔄 Estimer prix Discogs</button>
+          <span id="ok-price-fetch-status" style="font-size:11px;color:var(--text3)"></span>
           <button class="btn btn-sm" onclick="exportOkAlbumsCSV()">↓ CSV</button>
         </div>
       </div>
      <div class="table-wrap"><table>
-        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Genre</th><th>Supports</th><th>Note MB</th><th>Note DC</th><th>Note RYM</th><th>Écoutes</th><th style="width:120px"></th></tr></thead>
+        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Genre</th><th>Supports</th><th>Note MB</th><th>Note DC</th><th>Note RYM</th><th>Valeur DC</th><th>Écoutes</th><th style="width:120px"></th></tr></thead>
         <tbody id="ok-tbody"></tbody>
       </table></div>
     </div>
@@ -1023,7 +1007,7 @@
         </div>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th style="width:80px"></th></tr></thead>
+        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th>Valeur DC</th><th style="width:80px"></th></tr></thead>
         <tbody id="forsale-tbody"></tbody>
       </table></div>
     </div>

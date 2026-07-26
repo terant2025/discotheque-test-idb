@@ -367,64 +367,14 @@ class LocalDBQuery {
 }
 
 class LocalDB {
-  constructor() {
-    this._cache = {}; this._nextIds = {}; this._loading = {};
-    // Bug corrigé v2026.07.15 ("la sync reste active en permanence") : _persist() écrivait
-    // AUPARAVANT l'intégralité de la table sur IndexedDB à CHAQUE appel. Or plusieurs endroits du
-    // code (sbUpsert, flushTrackCountsToSupabase, flushAlbumCountsToSupabase, la purge des albums
-    // supprimés, etc.) découpent volontairement leurs upserts/delete en tranches de 200-400 lignes
-    // — une habitude héritée de l'époque Supabase réseau (éviter les payloads HTTP trop gros),
-    // mais totalement contre-productive ici puisque CHAQUE tranche re-sérialisait et réécrivait la
-    // table COMPLÈTE (jusqu'à 116 000+ lignes pour lastfm_tracks). Mesuré : ~95 tranches de 400
-    // lignes sur une table de 37 922 lignes prennent 7-8s (contre 0.3s en un seul appel), et
-    // lastfm_tracks (116 334 lignes chez Antoine, tranches de 400 → ~291 réécritures complètes)
-    // pouvait bloquer l'indicateur "🟢 Sync…" plusieurs minutes d'affilée.
-    // Fix : _persist() ne réécrit plus IMMÉDIATEMENT — elle marque la table "sale" et planifie un
-    // flush unique différé (debounce 40ms). _cache[name] reste à jour en mémoire à chaque appel
-    // (aucune incohérence de lecture), seule l'écriture PHYSIQUE sur disque est regroupée. Les
-    // boucles par tranches ci-dessus n'attendant plus une vraie écriture disque entre deux
-    // itérations, elles s'enchaînent en quelques ms — sous les 40ms du debounce — qui ne déclenche
-    // donc qu'UNE SEULE écriture réelle pour toute la rafale, sans modifier aucun appelant.
-    this._dirty = {};
-    this._flushTimers = {};
-    this._flushPromises = {};
-    // Filet de sécurité : flush immédiat de tout ce qui reste en attente si l'onglet se ferme
-    // pendant la fenêtre de 40ms, pour ne jamais perdre la toute dernière rafale.
-    if (typeof window !== 'undefined' && window.addEventListener) {
-      window.addEventListener('beforeunload', () => { this.flushAllPending(); });
-    }
-  }
+  constructor() { this._cache = {}; this._nextIds = {}; this._loading = {}; }
   from(table) { return new LocalDBQuery(this, table); }
   async _getTable(name) {
     if (this._cache[name]) return this._cache[name];
     if (!this._loading[name]) this._loading[name] = idbGetRaw('t:' + name).then(v => v || []);
     return (this._cache[name] = await this._loading[name]);
   }
-  _persist(name) {
-    this._dirty[name] = true;
-    if (!this._flushPromises[name]) {
-      this._flushPromises[name] = new Promise((resolve, reject) => {
-        this._flushTimers[name] = setTimeout(() => {
-          this._flushTimers[name] = null;
-          this._dirty[name] = false;
-          this._flushPromises[name] = null;
-          idbPutRaw('t:' + name, this._cache[name]).then(() => resolve(true), reject);
-        }, 40);
-      });
-    }
-    return this._flushPromises[name];
-  }
-  // Écrit immédiatement toutes les tables encore "sales" — appelé à la fermeture de l'onglet pour
-  // ne jamais perdre la dernière rafale d'écritures groupées.
-  async flushAllPending() {
-    const names = Object.keys(this._dirty).filter(n => this._dirty[n]);
-    for (const name of names) {
-      if (this._flushTimers[name]) { clearTimeout(this._flushTimers[name]); this._flushTimers[name] = null; }
-      this._dirty[name] = false;
-      this._flushPromises[name] = null;
-      try { await idbPutRaw('t:' + name, this._cache[name]); } catch(e) {}
-    }
-  }
+  async _persist(name) { await idbPutRaw('t:' + name, this._cache[name]); }
   _nextId(name) {
     if (!this._nextIds[name]) {
       let max = 0;
@@ -847,15 +797,11 @@ async function sbUpsert(table, rows, onConflict) {
     seen.set(k, r);
   });
   const deduped = [...seen.values()];
-  // Bug corrigé v2026.07.15 ("sync qui ne s'arrête jamais") : ce découpage en tranches de 400
-  // lignes n'a plus lieu d'être depuis la migration IndexedDB (Phase 1) — il ne protégeait que
-  // contre la limite de payload HTTP du VRAI Supabase, désormais hors-jeu. Contre le shim LocalDB,
-  // chaque tranche réécrivait pourtant l'INTÉGRALITÉ de la table (jusqu'à 116 000+ lignes pour
-  // lastfm_tracks) : ~95 tranches sur une table de 37 922 lignes prenaient 7-8s contre 0.3s en un
-  // seul appel — d'où l'indicateur "🟢 Sync…" qui semblait ne jamais se terminer. Un seul appel,
-  // quelle que soit la taille, est strictement local (mémoire + IndexedDB) et ne coûte rien de plus.
-  const { error } = await window._sb.from(table).upsert(deduped, { onConflict });
-  if (error) throw error;
+  const size = 400;
+  for (let i = 0; i < deduped.length; i += size) {
+    const { error } = await window._sb.from(table).upsert(deduped.slice(i, i + size), { onConflict });
+    if (error) throw error;
+  }
 }
 
 // Dédoublonner le tableau albums en mémoire
@@ -1029,10 +975,9 @@ async function saveToSupabase(opts) {
     }
     const toDelete = remoteIds.filter(id => !localIds.has(id));
     await autoSnapshotBeforeDelete(toDelete.length);
-    // Bug corrigé v2026.07.15 : plus de découpage en tranches de 200 (même raison que sbUpsert
-    // ci-dessus) — un seul .delete().in() couvre toute la liste sans coût supplémentaire côté
-    // LocalDB, et évite une réécriture complète de la table `albums` par tranche.
-    if (toDelete.length) await window._sb.from('albums').delete().in('id', toDelete);
+    for (let i = 0; i < toDelete.length; i += 200) {
+      await window._sb.from('albums').delete().in('id', toDelete.slice(i, i + 200));
+    }
     if (toDelete.length) console.log(`${toDelete.length} albums supprimés (sync)`);
 
     // ── Tracks isolés (PK composite artist_norm+title_norm) ──────────────────
@@ -1421,21 +1366,7 @@ async function loadFromSupabase() {
       }
     }
     setTimeout(() => updateLastSyncLabel(), 100);
-    // Bug corrigé v2026.07.15 (signalé par Antoine : "le bitrate ne se met pas à jour
-    // correctement au réimport MusicBee, des morceaux remplacés continuent à ressortir en basse
-    // qualité") : ces deux appels n'étaient PAS attendus (ni l'un après l'autre, ni le fetch de
-    // chacun) — ils tournaient donc en CONCURRENCE. loadMusicBeeTracks() ne réinjecte les pistes
-    // d'un album dans albumTracksCache QUE s'il n'y trouve encore AUCUNE entrée source:'musicbee'
-    // (`hasMb`) — un filet de secours pour les albums dont album_tracks serait incomplet. Mais
-    // loadAlbumTracks() commence par un `albumTracksCache = {}` PUIS reconstruit progressivement
-    // depuis album_tracks (la source la plus à jour après un réimport XML) : si loadMusicBeeTracks()
-    // termine sa propre lecture AVANT que ce rebuild soit fini (ordre non garanti, dépend juste de
-    // la taille relative des deux tables ce jour-là), `hasMb` est trouvé à `false` pour un album
-    // pourtant déjà à jour, et une version issue de musicbee_tracks (qui peut avoir fini sa
-    // dernière sauvegarde en arrière-plan à un instant différent) écrase silencieusement le
-    // bitrate fraîchement réimporté. Un `await` explicite avant de lancer loadMusicBeeTracks()
-    // élimine la course : album_tracks a alors TOUJOURS fini de peupler le cache en premier.
-    await loadAlbumTracks();
+    loadAlbumTracks();
     loadMusicBeeTracks();
     setTimeout(() => fetchMissingCovers(), 3000);
     nextId = Math.max(nextId, computeNextId());
@@ -2222,7 +2153,7 @@ const FILTER_PRESET_VIEWS = {
     selectId: 'filter-preset-select-wish',
     resetPage: false,
     renderFn: () => renderWishlist(),
-    fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio', 'filter-wish-sort'],
+    fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio'],
     noteOpPairs: []
   },
   rym: {
@@ -3195,11 +3126,7 @@ function renderMissing() {
   const minP   = parseInt(document.getElementById('filter-missing-plays')?.value || '0') || 0;
   const statusF= document.getElementById('filter-missing-status')?.value || '';
   const genreF = (document.getElementById('filter-missing-genre')?.value  || '').toLowerCase().trim();
-  // Filtre RYM à opérateur libre (demandé par Antoine : présent / absent / ≥ / ≤ / = / >),
-  // même convention que la Collection et la Discographie (filter-rym-note-op/val + matchNoteFilter)
-  // — remplace l'ancien select à seuils figés (5 / ≥4.5 / ≥4 / ≥3 / ≤2.5 / noté / non noté).
-  const rymOp  = document.getElementById('filter-missing-rym-op')?.value  || '';
-  const rymVal = document.getElementById('filter-missing-rym-val')?.value || '';
+  const rymF   = document.getElementById('filter-missing-rym')?.value || '';
   const sortF  = document.getElementById('filter-missing-sort')?.value || 'plays';
  
   // Remplir le select genre une seule fois (genre récupéré via RYM, lastfmData n'en a pas)
@@ -3237,9 +3164,17 @@ function renderMissing() {
     if (albf && !m.album.toLowerCase().includes(albf)) return false;
     if (genreF && !genre.includes(genreF)) return false;
     if (m.plays < minP) return false;
-    if (!matchNoteFilter(rymOp, rymVal, rymEntry?.rating || 0)) return false;
-    const missingYearF = (document.getElementById('filter-missing-year')?.value || '').trim();
-    if (missingYearF && !(rymEntry?.year||'').startsWith(missingYearF)) return false;
+    const hasRymRating = (rymEntry?.rating || 0) > 0;
+		if (rymF === 'rym'   && !hasRymRating) return false;
+		if (rymF === 'norym' && hasRymRating)  return false;
+		const missingYearF = (document.getElementById('filter-missing-year')?.value || '').trim();
+		if (missingYearF && !(rymEntry?.year||'').startsWith(missingYearF)) return false;
+		if (rymF === 'low') {
+          if ((rymEntry?.rating || 0) === 0 || (rymEntry?.rating || 0) > 2.5) return false;
+        } else if (rymF && !isNaN(parseFloat(rymF))) {
+          const threshold = parseFloat(rymF);
+          if ((rymEntry?.rating || 0) < threshold) return false;
+        }
     return true;
   });
 
@@ -3294,9 +3229,7 @@ function renderMissing() {
       const div = document.createElement('div');
       div.className = 'missing-card';
       div.style.cssText = `padding:10px 14px;gap:10px;opacity:${st==='ignored'?0.5:1}`;
-      const key = normalizeKey(m.artist, m.album);
       div.innerHTML = `
-        <input type="checkbox" class="row-select-missing" data-key="${sid(key)}" ${selectedMissingAlbumKeys.has(key) ? 'checked' : ''} style="flex-shrink:0" onclick="event.stopPropagation()">
         <div class="missing-info" style="min-width:0;flex:1">
           <div class="title" style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.album)} ${stBadge}</div>
           <div class="sub" style="font-size:11px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
@@ -3319,85 +3252,6 @@ function renderMissing() {
   }
 
   requestAnimationFrame(renderChunk);
-}
-
-// ── Sélection multiple & actions de masse (last.fm — Albums) ────────────────────────────
-// Demandé par Antoine, même besoin que pour "last.fm morceaux" (v2026.07.12) : les actions
-// (🚫 Ignorer, 👂 À écouter, 🎯 Wishlist) ne s'appliquaient qu'à un album à la fois. Clé de
-// sélection = normalizeKey(artiste,album), pas un index de ligne — computeMissing()/le filtre
-// reconstruisent _missingListCache à chaque rendu, une clé texte survit à un changement de
-// filtre/tri entre deux sélections là où un index redeviendrait invalide. Contrairement à "last.fm
-// morceaux", pas d'action "＋ Ajouter" ici : ces boutons ne font que qualifier une ligne last.fm
-// (statut + wishlist, qui n'est pas la collection elle-même), rien ne crée d'entrée de collection —
-// cohérent avec le principe "seuls les imports Discogs/MusicBee font foi".
-let selectedMissingAlbumKeys = new Set();
-
-function renderMissingBulkBar() {
-  const n = selectedMissingAlbumKeys.size;
-  const bar = document.getElementById('missing-bulk-bar');
-  if (!bar) return;
-  const countEl = document.getElementById('missing-bulk-count');
-  if (countEl) countEl.textContent = n ? `${n} album${n > 1 ? 's' : ''} sélectionné${n > 1 ? 's' : ''}` : '';
-  bar.style.display = n ? 'flex' : 'none';
-}
-
-function toggleSelectAllMissing(checked) {
-  const list = _missingListCache || [];
-  list.forEach(m => {
-    const key = normalizeKey(m.artist, m.album);
-    if (checked) selectedMissingAlbumKeys.add(key); else selectedMissingAlbumKeys.delete(key);
-  });
-  renderMissingBulkBar();
-  document.querySelectorAll('#missing-grid .row-select-missing').forEach(cb => { cb.checked = checked; });
-}
-
-function clearMissingSelection() {
-  selectedMissingAlbumKeys.clear();
-  const selAllCb = document.getElementById('select-all-missing');
-  if (selAllCb) selAllCb.checked = false;
-  renderMissingBulkBar();
-  renderMissing();
-}
-
-// Réutilise la même sémantique toggle que setLastfmStatusFromMissing (ré-appliquer le même statut
-// à un album qui l'a déjà = le retirer) — cohérent avec le comportement ligne par ligne. Manipule
-// directement _lastfmStatus/wishlist[] plutôt que d'appeler setLastfmStatus() en boucle (qui
-// re-render toute la grille à CHAQUE appel — coûteux sur une sélection de plusieurs centaines
-// d'albums), un seul renderMissing() est déclenché à la fin.
-function bulkSetMissingStatus(status) {
-  if (!selectedMissingAlbumKeys.size) return;
-  const byKey = new Map((_missingListCache || []).map(m => [normalizeKey(m.artist, m.album), m]));
-  let changed = 0, wishAdded = 0, wishRemoved = 0;
-  selectedMissingAlbumKeys.forEach(key => {
-    const m = byKey.get(key);
-    if (!m) return; // sélection issue d'un filtre différent, album plus dans la liste courante
-    const current = getLastfmStatus(m.artist, m.album);
-    const newStatus = current === status ? '' : status;
-    if (newStatus) _lastfmStatus[key] = newStatus; else delete _lastfmStatus[key];
-    if (newStatus === 'wishlist') {
-      if (!wishlist.find(w => normalizeKey(w.artist, w.album) === key)) {
-        addToWishlist(m.artist, m.album, '', 'lastfm', m.plays, 0, '');
-        wishAdded++;
-      }
-    } else if (current === 'wishlist') {
-      const before = wishlist.length;
-      wishlist = wishlist.filter(w => normalizeKey(w.artist, w.album) !== key);
-      if (wishlist.length !== before) wishRemoved++;
-    }
-    changed++;
-  });
-  if (window._sb) {
-    window._sb.from('meta').upsert({ key: 'lastfm_status', value: JSON.stringify(_lastfmStatus) }, { onConflict: 'key' }).then(() => {});
-  }
-  invalidateCache();
-  if (wishAdded || wishRemoved) updateNavBadges();
-  if (wishAdded || wishRemoved) saveToStorage();
-  clearMissingSelection();
-  const label = status === 'ignored'   ? 'ignoré(s)/réactivé(s)'
-              : status === 'to_listen' ? 'marqué(s) à écouter / retiré(s)'
-              : status === 'wishlist'  ? 'ajouté(s)/retiré(s) de la wishlist'
-              : status;
-  toast(`${changed} album(s) ${label}`);
 }
 
 // Cible courante de l'association last.fm
@@ -3678,25 +3532,18 @@ function renderMissingTracks() {
     const albumBadge = albumInWishlist
       ? ' <span style="font-size:10px;color:var(--amber)" title="Cet album est dans la wishlist albums">🎯💿</span>'
       : '';
-    // Condensé (v2026.07.15) — Antoine : "pas super lisible". N'affiche plus la liste complète
-    // des tags Album concaténés (pouvait déborder sur plusieurs lignes) : seul le premier est
-    // montré, cliquable comme avant (filtre), le reste est résumé en badge "+N" avec la liste
-    // complète en infobulle plutôt que perdu — cliquer sur le badge filtre sur le 2e tag (le plus
-    // souvent suffisant pour distinguer), les suivants restent accessibles via le champ filtre.
-    const albumCell = !albumNames.length ? '–' :
-      `<span onclick="event.stopPropagation();filterMissingTracksByAlbum('${sid(albumNames[0])}')" style="cursor:pointer" title="Filtrer la liste sur cet album">${esc(albumNames[0])}</span>` +
-      (albumNames.length > 1 ? ` <span onclick="event.stopPropagation();filterMissingTracksByAlbum('${sid(albumNames[1])}')" style="cursor:pointer;color:var(--text3);font-size:10px" title="${esc(albumNames.slice(1).join(' · '))}">+${albumNames.length - 1}</span>` : '');
     return `<tr style="opacity:${isIgnored ? 0.45 : 1}">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-key="${sid(key)}" ${selectedMissingTrackKeys.has(key) ? 'checked' : ''} onchange="toggleMissingTrackSelected('${sid(key)}', this.checked)"></td>
     <td style="font-weight:500">${esc(d.track)}${stBadge}</td>
-    <td style="color:var(--text2);font-size:13px"><span onclick="event.stopPropagation();filterMissingTracksByArtist('${sid(d.artist)}')" style="cursor:pointer" title="Filtrer la liste sur cet artiste">${esc(d.artist)}</span> <span onclick="event.stopPropagation();openArtistView('${sid(d.artist)}')" style="cursor:pointer;opacity:.5" title="Voir la Vue Artiste">👤</span></td>
-    <td style="color:var(--text3);font-size:12px">${albumCell}${albumBadge}</td>
+    <td style="color:var(--text2);font-size:13px">${artistLink(d.artist)}</td>
+    <td style="color:var(--text3);font-size:12px">${esc(d.album||'–')}${albumBadge}</td>
     <td class="mono" style="color:var(--accent)">${d.plays}</td>
-    <td style="display:flex;gap:2px;flex-wrap:nowrap;white-space:nowrap">
-      <button class="btn btn-xs" onclick="openYouTubeMusicSearch(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'))" title="Chercher sur YouTube Music">▶️</button>
-      <button class="btn btn-xs ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau de la collection">🔗</button>
-      <button class="btn btn-xs ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
-      <button class="btn btn-xs ${isIgnored?'btn-danger':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
+    <td style="display:flex;gap:3px;flex-wrap:wrap">
+      <button class="btn btn-sm ${isIgnored?'btn-danger':''}" onclick="setMissingTrackStatus(${i},'ignored')" title="${isIgnored?'Retirer statut ignoré':'Ignorer'}">🚫</button>
+      <button class="btn btn-sm ${isLinked?'btn-accent':''}" onclick="openTrackAssocModal(${i})" title="Associer à un morceau de la collection">🔗</button>
+      <button class="btn btn-sm ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
+      <button class="btn btn-sm btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋</button>
+      <button class="btn btn-sm" onclick="openYouTubeMusicSearch(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'))" title="Chercher sur YouTube Music">▶️</button>
     </td>
   </tr>`;
   }).join('') + (list.length > 200 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
@@ -3707,52 +3554,18 @@ function renderMissingTracks() {
   renderMtrackBulkBar();
 }
 
-// Réinitialise tous les filtres propres à cette liste (artiste/titre/album/écoutes/tri/statut),
-// demandé par Antoine — jusqu'ici il fallait vider chaque champ à la main un par un.
-// Ne touche volontairement pas #global-search (recherche globale partagée avec les autres écrans).
-function clearMissingTracksFilters() {
-  const artistEl = document.getElementById('filter-mtrack-artist');
-  const titleEl  = document.getElementById('filter-mtrack-title');
-  const albumEl  = document.getElementById('filter-mtrack-album');
-  const playsEl  = document.getElementById('filter-mtrack-plays');
-  const sortEl   = document.getElementById('filter-mtrack-sort');
-  const statusEl = document.getElementById('filter-mtrack-status');
-  if (artistEl) artistEl.value = '';
-  if (titleEl)  titleEl.value  = '';
-  if (albumEl)  albumEl.value  = '';
-  if (playsEl)  playsEl.value  = '';
-  if (sortEl)   sortEl.value   = 'plays';
-  if (statusEl) statusEl.value = '';
+function addTrackFromMissingIdx(idx) {
+  const d = renderMissingTracks._cache?.[idx];
+  if (!d) return;
+  if (tracks.find(t => normalizeKey(t.artist, t.title) === normalizeKey(d.artist, d.track))) {
+    toast('Déjà dans les morceaux isolés', 'warn'); return;
+  }
+  tracks.push({ id: uid(), title: d.track, artist: d.artist, album: d.album || '', format: 'mp3', duration: '', note: 0 });
+  invalidateCache();
+  saveToStorage();
   renderMissingTracks();
+  toast(`Ajouté : ${d.artist} — ${d.track}`);
 }
-
-// Clic sur un nom d'artiste dans la liste → filtre toute la liste sur cet artiste, demandé par
-// Antoine. Remplit le champ dédié plutôt qu'un filtre séparé, pour rester combinable avec les
-// autres filtres (titre/album/écoutes/statut) déjà en place et visible/modifiable ensuite.
-function filterMissingTracksByArtist(encodedArtist) {
-  const el = document.getElementById('filter-mtrack-artist');
-  if (!el) return;
-  el.value = unsid(encodedArtist);
-  renderMissingTracks();
-}
-
-// Même principe pour un clic sur un nom d'album (un morceau peut porter plusieurs tags Album
-// consolidés — d.album — chacun cliquable séparément, cf. rendu de la colonne Album ci-dessus).
-function filterMissingTracksByAlbum(encodedAlbum) {
-  const el = document.getElementById('filter-mtrack-album');
-  if (!el) return;
-  el.value = unsid(encodedAlbum);
-  renderMissingTracks();
-}
-
-// addTrackFromMissingIdx()/bulkAddMissingTracksToIsolated() supprimées (v2026.07.15) : Antoine a
-// précisé que l'application ne doit JAMAIS créer d'entrée dans la collection manuellement — seuls
-// les imports Discogs (CSV) et MusicBee (XML) font foi. Ces deux fonctions poussaient directement
-// dans `tracks` (morceaux isolés, une vraie donnée de collection), ce qui contredisait ce principe
-// déjà en place ailleurs dans le fichier (aucun bouton "ajouter" manuel pour albums/morceaux). Les
-// morceaux manquants restent qualifiables (🚫 Ignorer / 🎯 Wishlist / 🔗 Associer à une entrée
-// EXISTANTE) mais plus créables depuis cet écran — pour les avoir en collection, réimporter depuis
-// MusicBee/Discogs comme pour toute autre entrée.
 
 // ── Sélection multiple & actions de masse (last.fm — Morceaux) ──────────────────────────
 // Demandé par Antoine : jusqu'ici chaque action (🚫 Ignorer, 🎯 Wishlist, ＋ Ajouter) ne
@@ -3829,8 +3642,22 @@ function bulkSetMissingTrackStatus(status) {
   toast(`${changed} morceau(x) ${label}`);
 }
 
-// bulkAddMissingTracksToIsolated() supprimée (v2026.07.15) — voir commentaire plus haut
-// (addTrackFromMissingIdx). Aucune action de masse ne doit créer d'entrée de collection.
+function bulkAddMissingTracksToIsolated() {
+  if (!selectedMissingTrackKeys.size) return;
+  const byKey = new Map(computeMissingTracks().map(d => [normalizeKey(d.artist, d.track), d]));
+  let added = 0, skipped = 0;
+  selectedMissingTrackKeys.forEach(key => {
+    const d = byKey.get(key);
+    if (!d) return;
+    if (tracks.find(t => normalizeKey(t.artist, t.title) === key)) { skipped++; return; }
+    tracks.push({ id: uid(), title: d.track, artist: d.artist, album: d.album || '', format: 'mp3', duration: '', note: 0 });
+    added++;
+  });
+  invalidateCache();
+  saveToStorage();
+  clearMissingTrackSelection();
+  toast(`${added} morceau(x) ajouté(s) aux morceaux isolés${skipped ? ` — ${skipped} déjà présent(s)` : ''}`);
+}
 
 // ── Statuts morceaux last.fm ─────────────────────────────────────────────────
 function setMissingTrackStatus(idx, status) {
@@ -4752,8 +4579,16 @@ async function importDiscogs(input) {
     toast(`Discogs : ${added} ajoutés, ${updated} mis à jour`);
     saveToStorage();
     updateNavBadges();
-    // Charger les tracklists Discogs manquantes en arrière-plan
-    setTimeout(() => fetchAllTracklists(true), 1500);
+    // Charger les tracklists Discogs manquantes en arrière-plan, puis — demandé par
+    // Antoine — estimer le prix des CD nouvellement importés qui n'en ont pas encore
+    // (fetchAllMarketplaceStats() ne cible déjà que a.marketplace_price == null, donc
+    // strictement incrémental : les prix déjà connus ne sont jamais retouchés). Chaîné
+    // APRÈS le fetch des tracklists plutôt qu'en parallèle, pour ne pas faire cohabiter
+    // deux boucles pacées à 700ms sur le même Edge Function/API Discogs en même temps.
+    setTimeout(async () => {
+      await fetchAllTracklists(true);
+      fetchAllMarketplaceStats();
+    }, 1500);
   } catch (e) {
     status.textContent = 'Erreur : ' + e.message;
     status.className = 'status err';
@@ -5318,20 +5153,33 @@ async function importMusicBeeXML(input) {
     if (orphansCleaned) console.log(`[XML import] ${orphansCleaned} album(s) retiré(s) de Ok/Discographie (absents de cet export)`);
 
     // ── Morceaux isolés : REMPLACEMENT COMPLET depuis MusicBee ──
+    // Le XML MusicBee ne contient un MBID que si Picard/MusicBee l'a lui-même taggé sur le
+    // fichier — un MBID trouvé DANS l'app (recherche manuelle "🔍 MusicBrainz" ou "🪄
+    // Auto-matcher") ne vit que sur l'objet en mémoire/IndexedDB, jamais réécrit dans la
+    // bibliothèque MusicBee. Comme ce bloc remplace entièrement `tracks`, un tel MBID était
+    // silencieusement perdu à chaque réimport XML si le tag MusicBee lui-même restait vide —
+    // signalé par Antoine ("les correspondances sont trouvées mais elles se cassent au
+    // réimport XML"). Corrigé sur le même principe que existingTrackNotes juste en dessous :
+    // on conserve le MBID déjà connu quand le XML n'en fournit pas.
     const existingTrackNotes = {};
-    tracks.forEach(t => { existingTrackNotes[normalizeKey(t.artist, t.title)] = t.note || 0; });
+    const existingTrackMbids = {};
+    tracks.forEach(t => {
+      existingTrackNotes[normalizeKey(t.artist, t.title)] = t.note || 0;
+      if (t.mb_recording_id) existingTrackMbids[normalizeKey(t.artist, t.title)] = t.mb_recording_id;
+    });
     tracks = isolatedTracks
       .filter(t => t.title && t.artist)
       .map(t => {
         const an = normalizeKey(t.artist, '').replace('|||', '');
         const tn = normalizeKey('', t.title).replace('|||', '');
+        const nk = normalizeKey(t.artist, t.title);
         return {
           id: an + '|||' + tn,
           artistNorm: an, titleNorm: tn,
           title: t.title, artist: t.artist, album: t.album,
           format: t.format, duration: '',
-          note: existingTrackNotes[normalizeKey(t.artist, t.title)] || t.rating || 0,
-          mb_recording_id: t.mbRecordingId || undefined,
+          note: existingTrackNotes[nk] || t.rating || 0,
+          mb_recording_id: t.mbRecordingId || existingTrackMbids[nk] || undefined,
           bitrate: t.bitrate || undefined,
         };
       });
@@ -6636,17 +6484,12 @@ async function _flushLbToSupabase(isFinal) {
 
     if (isFinal) {
       // Enrichir mb_release_id dans albums[] Supabase
-      // Bug corrigé v2026.07.15 ("sync qui ne s'arrête jamais") : cette boucle faisait un
-      // .update().eq('id', a.id) PAR ALBUM (pas par tranche) — contre le shim LocalDB, chaque
-      // appel réécrivait l'intégralité de la table `albums`, donc jusqu'à ~2000+ réécritures
-      // complètes rien que pour cette étape. Un seul upsert groupé (clé id) fait la même chose
-      // en un seul appel.
       const withMbid = albums.filter(a => a.mb_release_id);
-      if (withMbid.length) {
-        await window._sb.from('albums').upsert(
-          withMbid.map(a => ({ id: a.id, mb_release_id: a.mb_release_id })),
-          { onConflict: 'id' }
-        );
+      for (let i = 0; i < withMbid.length; i += 200) {
+        const batch = withMbid.slice(i, i + 200);
+        for (const a of batch) {
+          await window._sb.from('albums').update({ mb_release_id: a.mb_release_id }).eq('id', a.id).then(() => {});
+        }
       }
       saveToStorage();
     }
@@ -6694,12 +6537,12 @@ async function flushTrackCountsToSupabase() {
       artist: d.artist, track: d.track, album: d.album || '',
       plays: d.plays, updated_at: new Date().toISOString()
     }));
-    // Bug corrigé v2026.07.15 : plus de découpage par tranches de 400 (cf. sbUpsert) — pour cette
-    // table qui atteint 116 000+ lignes chez Antoine, ça représentait ~290 réécritures complètes
-    // de la table à chaque flush. Un seul upsert, quelle que soit la taille.
-    const { error } = await window._sb.from('lastfm_tracks')
-      .upsert(rows, { onConflict: 'artist,track,album' });
-    if (error) console.warn('flush chunk error:', error);
+    // Upsert par tranches de 400 — clé (artist, track, album)
+    for (let i = 0; i < rows.length; i += 400) {
+      const { error } = await window._sb.from('lastfm_tracks')
+        .upsert(rows.slice(i, i + 400), { onConflict: 'artist,track,album' });
+      if (error) console.warn('flush chunk error:', error);
+    }
     console.log(`lastfm_tracks : ${rows.length} morceaux sauvegardés`);
   } catch(e) { console.warn('Erreur flush lastfm_tracks:', e); }
 }
@@ -6714,10 +6557,11 @@ async function flushAlbumCountsToSupabase() {
     const rows = Object.values(_lastfmCounts).map(d => ({
       artist: d.artist, album: d.album, plays: d.plays || 0, updated_at: new Date().toISOString()
     }));
-    // Bug corrigé v2026.07.15 : plus de découpage par tranches (cf. sbUpsert / flushTrackCountsToSupabase).
-    const { error } = await window._sb.from('lastfm_data')
-      .upsert(rows, { onConflict: 'artist,album' });
-    if (error) console.warn('flush chunk error (albums):', error);
+    for (let i = 0; i < rows.length; i += 400) {
+      const { error } = await window._sb.from('lastfm_data')
+        .upsert(rows.slice(i, i + 400), { onConflict: 'artist,album' });
+      if (error) console.warn('flush chunk error (albums):', error);
+    }
     console.log(`lastfm_data : ${rows.length} albums sauvegardés`);
   } catch(e) { console.warn('Erreur flush lastfm_data:', e); }
 }
@@ -6967,6 +6811,64 @@ async function fetchMarketplaceStats(discogsId) {
   };
 }
 
+// Estimation Discogs à la demande pour UN album (bouton "⚠️ Sans estimation" cliquable dans
+// Discographie et Vendre — demandé par Antoine : "je veux identifier les articles sans
+// estimation pour vérifier que le lien discogs n'est pas erroné"). Contrairement à
+// fetchAllMarketplaceStats() (boucle pacée sur tous les albums éligibles, bouton dédié de
+// Valeur collection), ici un seul appel immédiat au clic — permet de confirmer tout de suite si
+// un discogsId précis est cassé (erreur retournée par l'Edge Function → toast explicite avec
+// l'ID en cause, plutôt que de laisser l'album silencieusement à "–" au prochain passage du
+// batch général).
+async function fetchSingleMarketplaceEstimate(idSid) {
+  const id = unsid(idSid);
+  const a = albums.find(x => x.id === id || x.id === String(id));
+  if (!a || !a.discogsId) return;
+  try {
+    const stats = await fetchMarketplaceStats(a.discogsId);
+    a.marketplace_price = stats.price;
+    a.marketplace_currency = stats.currency;
+    a.marketplace_num_for_sale = stats.numForSale;
+    a.marketplace_fetched_at = new Date().toISOString();
+    saveToStorage();
+    if (document.getElementById('sec-discographie')?.classList.contains('active')) renderDiscographie();
+    if (document.getElementById('sec-forsale')?.classList.contains('active')) renderForSale();
+    if (stats.price != null) toast(`Estimation récupérée : ${stats.price.toLocaleString('fr-FR')} ${stats.currency}`);
+    else toast(`Aucune offre en vente actuellement sur Discogs (ID ${a.discogsId} valide, juste pas de stock)`, 'info');
+  } catch (e) {
+    console.error('fetchSingleMarketplaceEstimate:', a.artist, '—', a.album, 'discogsId=', a.discogsId, e.message || e);
+    toast(`Échec — vérifiez le lien Discogs (ID ${a.discogsId}) : ${e.message || e}`, 'error');
+  }
+}
+
+// Cellule "Valeur DC" pour la wishlist (demandé par Antoine). Distincte de discogsValueCell()
+// (Discographie/Vendre) : pas de retry au clic ici (pas de discogsId réel sur une entrée
+// wishlist, juste une correspondance approximative trouvée par fetchWishlistMarketplaceEstimates
+// — le bouton de traitement en masse de la wishlist couvre déjà le nouvel essai). Toujours
+// préfixé "≈" quand un prix est affiché, pour rappeler que ce n'est pas un pressage confirmé.
+function wishlistValueCell(w) {
+  if (w.marketplace_no_match) return `<span style="color:var(--text3);font-size:11px" title="Aucun résultat Discogs pour cette recherche">∅</span>`;
+  if (w.marketplace_price != null) {
+    const cur = w.marketplace_currency === 'EUR' ? '€' : (w.marketplace_currency || '');
+    const age = w.marketplace_fetched_at ? formatProvenanceAge(w.marketplace_fetched_at) : '';
+    const tip = (age ? 'Estimé ' + age : '') + ' — correspondance approximative (' + (w.marketplace_matched_title || '?') + '), pressage non garanti';
+    return `<span title="${esc(tip)}" style="font-family:var(--mono);font-size:12px;color:var(--accent)">≈ ${Number(w.marketplace_price).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}</span>`;
+  }
+  return `<span style="color:var(--text3);font-size:11px">–</span>`;
+}
+// pas de discogsId du tout → "–" neutre (pas le sujet ici, cf. onglet "IDs manquants") ; ID
+// présent mais jamais estimé/estimation ratée → badge cliquable "⚠️ Sans estimation" qui
+// déclenche fetchSingleMarketplaceEstimate() pour vérifier le lien immédiatement ; prix connu →
+// montant affiché, avec l'âge de la donnée en info-bulle (cohérent avec renderMarketValue()).
+function discogsValueCell(a) {
+  if (!a.discogsId) return `<span style="color:var(--text3);font-size:11px">–</span>`;
+  if (a.marketplace_price != null) {
+    const cur = a.marketplace_currency === 'EUR' ? '€' : (a.marketplace_currency || '');
+    const age = a.marketplace_fetched_at ? formatProvenanceAge(a.marketplace_fetched_at) : '';
+    return `<span title="${age ? 'Estimé ' + esc(age) : ''}" style="font-family:var(--mono);font-size:12px;color:var(--accent)">${Number(a.marketplace_price).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}</span>`;
+  }
+  return `<span class="badge badge-missing" style="cursor:pointer" onclick="event.stopPropagation();fetchSingleMarketplaceEstimate('${sid(a.id)}')" title="Aucune estimation — cliquer pour réessayer maintenant et vérifier que le lien Discogs (ID ${esc(a.discogsId)}) est correct">⚠️ Sans estimation</span>`;
+}
+
 
 // Rechercher sur MusicBrainz via Edge Function (par artiste+album)
 async function searchMusicBrainz(artist, album) {
@@ -7037,10 +6939,10 @@ async function saveTracklist(albumId, tracks_) {
     disc_number:     t.disc_number||null,
     rating:          t.rating||null,
   }));
-  // Bug corrigé v2026.07.15 : plus de découpage par tranches de 100 (cf. sbUpsert) — un seul
-  // insert, quelle que soit la taille, contre le shim LocalDB.
-  const { error } = await window._sb.from('album_tracks').insert(rows);
-  if (error) console.warn('saveTracklist error:', error.message);
+  for (let i = 0; i < rows.length; i += 100) {
+    const { error } = await window._sb.from('album_tracks').insert(rows.slice(i, i + 100));
+    if (error) console.warn('saveTracklist error:', error.message);
+  }
   albumTracksCache[albumId] = (albumTracksCache[albumId] || [])
     .filter(t => t.source !== source).concat(tracks_);
 }
@@ -7448,6 +7350,25 @@ function importMusicBeeTracklists(trackDicts, str, num, dateStr, isolatedTracksA
 
 
     if (albumObj) {
+      // Même souci que pour les morceaux isolés (cf. plus haut) : le XML MusicBee ne porte
+      // un MBID que si Picard l'a lui-même taggé sur le fichier. Un MBID trouvé DANS l'app
+      // (recherche manuelle ou auto-match) ne vit que sur la piste en mémoire — jamais
+      // réécrit dans la bibliothèque MusicBee — et g.tracks (frais depuis le XML) écrasait
+      // systématiquement les pistes 'musicbee' existantes de albumTracksCache, MBID inclus.
+      // On reporte le MBID déjà connu quand le XML n'en fournit pas cette fois-ci (matché par
+      // titre normalisé, seule clé stable disponible ici).
+      const existingMbidByTitle = {};
+      (albumTracksCache[albumObj.id] || []).forEach(t => {
+        if (t.source === 'musicbee' && t.mb_recording_id) {
+          existingMbidByTitle[normalizeKey('', t.title).replace('|||', '')] = t.mb_recording_id;
+        }
+      });
+      g.tracks.forEach(t => {
+        if (!t.mb_recording_id) {
+          const key = normalizeKey('', t.title).replace('|||', '');
+          if (existingMbidByTitle[key]) t.mb_recording_id = existingMbidByTitle[key];
+        }
+      });
       albumTracksCache[albumObj.id] = (albumTracksCache[albumObj.id] || [])
         .filter(t => t.source !== 'musicbee').concat(g.tracks);
       toSave.push({ albumId: albumObj.id, tracks: g.tracks });
@@ -7523,9 +7444,10 @@ async function saveMusicBeeTracks(byKey) {
   if (!rows.length) return;
   try {
     await window._sb.from('musicbee_tracks').delete().neq('artist_norm', '___never___');
-    // Bug corrigé v2026.07.15 : plus de découpage par tranches de 400 (cf. sbUpsert).
-    const { error } = await window._sb.from('musicbee_tracks').insert(rows);
-    if (error) console.warn('saveMusicBeeTracks chunk error:', error.message);
+    for (let i = 0; i < rows.length; i += 400) {
+      const { error } = await window._sb.from('musicbee_tracks').insert(rows.slice(i, i + 400));
+      if (error) console.warn('saveMusicBeeTracks chunk error:', error.message);
+    }
     const byFolder = rows.reduce((acc, r) => { acc[r.folder] = (acc[r.folder]||0)+1; return acc; }, {});
     console.log(`musicbee_tracks : ${rows.length} pistes sauvegardées`, byFolder);
   } catch(e) { console.warn('saveMusicBeeTracks:', e); }
@@ -8089,7 +8011,7 @@ function renderOkAlbums() {
   const badge = document.getElementById('nav-ok-count');
   if (badge) badge.textContent = albums.filter(a=>a.okFolder).length;
   const tbody = document.getElementById('ok-tbody');
-  if (!list.length) { tbody.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="empty-icon">✅</div>Aucun album dans Ok/</div></td></tr>'; return; }
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="empty-icon">✅</div>Aucun album dans Ok/</div></td></tr>'; return; }
 
   const fmtBadge = a => [
     a.cd  ?'<span class="badge badge-cd">CD</span>':'',
@@ -8117,6 +8039,7 @@ const noteCell = a => a.note ? `<span style="font-family:var(--mono);font-size:1
     <td>${noteCell(a)}</td>
     <td>${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${a.discogsRating}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}</td>
     <td>${rymCell(a)}</td>
+    <td>${discogsValueCell(a)}</td>
     <td>
       <div class="plays-bar-wrap">
         <div class="plays-bar"><div class="plays-fill" style="width:${Math.round((a.plays||0)/Math.max(1,...albums.map(x=>x.plays||0))*100)}%"></div></div>
@@ -8154,7 +8077,7 @@ function renderForSale() {
   const badge = document.getElementById('nav-forsale-count');
   if (badge) badge.textContent = list.length;
   const tbody = document.getElementById('forsale-tbody');
-  if (!list.length) { tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
    const noteCell = a => a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`;
   tbody.innerHTML = list.map(a => `<tr>
@@ -8162,6 +8085,7 @@ function renderForSale() {
     <td class="mono">${a.year||'–'}</td>
     <td><div class="badges-cell">${fmtBadge(a)}</div></td>
     <td>${noteCell(a)}</td>
+    <td>${discogsValueCell(a)}</td>
     <td><button class="btn btn-sm" onclick="unmarkForSale('${sid(a.id)}')" title="Retirer">✓</button></td>
   </tr>`).join('');
 }
@@ -8795,13 +8719,14 @@ function exportWishlistCSV() {
   const list = wishFilteredList();
   const prioLabel = { high: 'Haute', mid: 'Moyenne', low: 'Basse' };
   const srcLabel  = { lastfm: 'last.fm', stock: 'Stock', rym: 'RYM', discography: 'Discographie MB', manual: 'Manuel' };
-  const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Notes','Ajouté le']];
+  const rows = [['Artiste','Album','Année','Source','Priorité','Écoutes last.fm','Note MB','Note DC','Note RYM','Valeur DC (approx.)','Notes','Ajouté le']];
   list.forEach(w => {
     const plays = wishPlays(w) || '';
     const owned = wishOwnedMatch(w);
     const rymEntry = wishRymEntry(w);
     rows.push([w.artist, w.album, w.year||'', srcLabel[w.source]||w.source,
-      prioLabel[w.prio]||w.prio, plays, owned?.note||'', owned?.discogsRating||'', rymEntry?.rating||'', w.notes||'',
+      prioLabel[w.prio]||w.prio, plays, owned?.note||'', owned?.discogsRating||'', rymEntry?.rating||'',
+      w.marketplace_price != null ? w.marketplace_price : '', w.notes||'',
       w.addedAt ? new Date(w.addedAt).toLocaleDateString('fr-FR') : '']);
   });
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -8908,10 +8833,6 @@ function wishFilteredList() {
   const sf   = document.getElementById('filter-wish-source')?.value || '';
   const pf   = document.getElementById('filter-wish-prio')?.value   || '';
   const yf   = (document.getElementById('filter-wish-year')?.value  || '').trim();
-  // Tri (demandé par Antoine) : date d'ajout / artiste / priorité (comportement historique,
-  // conservé comme valeur par défaut) / note MusicBee / compteur last.fm. Chaque option a un
-  // tri secondaire cohérent (le plus utile en cas d'égalité) plutôt qu'un ordre arbitraire.
-  const sortF = document.getElementById('filter-wish-sort')?.value || 'prio';
 
   return wishlist.filter(w => {
     return (!q    || (w.artist+' '+w.album).toLowerCase().includes(q))
@@ -8921,14 +8842,6 @@ function wishFilteredList() {
         && (!pf   || w.prio   === pf)
         && (!yf   || (w.year||'').startsWith(yf));
   }).sort((a, b) => {
-    if (sortF === 'date')   return String(b.addedAt || '').localeCompare(String(a.addedAt || '')); // plus récent d'abord
-    if (sortF === 'artist') return String(a.artist||'').localeCompare(String(b.artist||''), 'fr') || String(a.album||'').localeCompare(String(b.album||''), 'fr');
-    if (sortF === 'mbnote') {
-      const na = wishOwnedMatch(a)?.note || 0, nb = wishOwnedMatch(b)?.note || 0;
-      return nb - na || wishPlays(b) - wishPlays(a);
-    }
-    if (sortF === 'plays')  return wishPlays(b) - wishPlays(a) || String(a.artist||'').localeCompare(String(b.artist||''), 'fr');
-    // 'prio' (défaut, comportement historique) : priorité d'abord, écoutes last.fm en tri secondaire.
     const po = { high: 0, mid: 1, low: 2 };
     if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
     return wishPlays(b) - wishPlays(a);
@@ -8944,7 +8857,7 @@ function renderWishlist() {
 
   const tbody = document.getElementById('wish-tbody');
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="empty-icon">🎯</div>' +
+    tbody.innerHTML = '<tr><td colspan="12"><div class="empty"><div class="empty-icon">🎯</div>' +
       (wishlist.length ? 'Aucun résultat avec ces filtres.' : 'La wishlist est vide. Ajoutez des albums depuis last.fm, RYM ou le stock.') +
       '</div></td></tr>';
     renderWishBulkBar();
@@ -8974,6 +8887,7 @@ function renderWishlist() {
     <td class="mono">${owned?.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${owned.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
     <td class="mono">${owned?.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(owned.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : '<span style="color:var(--text3);font-size:11px">–</span>'}</td>
     <td class="mono" style="color:var(--amber)">${rymEntry?.rating ? rymEntry.rating.toFixed(2) + '★' : '–'}</td>
+    <td>${wishlistValueCell(w)}</td>
     <td style="font-size:11px;color:var(--text3)" title="${w.addedAt ? new Date(w.addedAt).toLocaleString('fr-FR') : ''}">${w.addedAt ? new Date(w.addedAt).toLocaleDateString('fr-FR') : '–'}</td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm" onclick="openWishModal(${w.id})" title="Modifier">✎</button>
@@ -9401,6 +9315,17 @@ function discoFilteredList() {
   let list = [];
   if (filter === 'no-cd') {
     list = getNumericWithoutCD().filter(a => !a.okFolder && !a.forSale);
+  } else if (filter === 'vendre') {
+    // Articles marqués à vendre — invisibles du reste de Discographie (exclus plus bas par
+    // "!a.forSale"), demandé par Antoine pour y voir aussi la valeur estimée Discogs, la
+    // donnée la plus utile précisément pour ces articles-là.
+    list = albums.filter(a => a.forSale && (a.cd || a.has_cd));
+  } else if (filter === 'no-estimate') {
+    // ID Discogs présent mais jamais estimé (ou estimation jamais retentée) — inclut aussi les
+    // articles à vendre, volontairement affranchi des exclusions ok/stock/forSale ci-dessous :
+    // demandé par Antoine pour vérifier qu'un discogsId n'est pas simplement erroné.
+    list = albums.filter(a => (a.cd || a.has_cd) && a.discogsId && a.marketplace_price == null
+      && !stockKeys.has(normalizeKey(a.artist, a.album)));
   } else {
     // Construire le Set des numKeys associés pour masquer les doublons liés
     const linkedNumKeySet = new Set(associations.map(a => String(a.numKey)));
@@ -9496,7 +9421,7 @@ function renderDiscographie() {
 
   const tbody = document.getElementById('disco-tbody');
   if (!slice.length) {
-    tbody.innerHTML = '<tr><td colspan="10"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
     document.getElementById('disco-page-info').textContent = '';
   // updateNavBadges called by saveToStorage
     renderBulkActionsBar();
@@ -9573,6 +9498,7 @@ function renderDiscographie() {
           ${a.discogsRating ? `<span style="font-family:var(--mono);font-size:12px;color:var(--blue)">${Number(a.discogsRating).toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`}
         </span></td>
       <td>${rymCell}</td>
+      <td>${discogsValueCell(a)}</td>
       <td>
         <div class="plays-bar-wrap">
           <div class="plays-bar"><div class="plays-fill" style="width:${Math.round((a.plays||0)/Math.max(1,...albums.map(x=>x.plays||0))*100)}%"></div></div>
@@ -10318,7 +10244,6 @@ function resetStockFilters() {
 function resetWishlistFilters() {
   ['filter-wish-artist', 'filter-wish-album', 'filter-wish-year'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   ['filter-wish-source', 'filter-wish-prio'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  const sortEl = document.getElementById('filter-wish-sort'); if (sortEl) sortEl.value = 'prio';
   renderWishlist();
 }
 
@@ -10724,12 +10649,13 @@ function exportFilteredAlbumsCSV() {
 // Discographie (filtre actif)
 function exportDiscoCSV() {
   const list = discoFilteredList();
-  const rows = [['Artiste','Album','Année','CD','FLAC','MP3','Digital','Backup num.','Note MB','Discogs ID']];
+  const rows = [['Artiste','Album','Année','CD','FLAC','MP3','Digital','Backup num.','Note MB','Discogs ID','Valeur DC']];
   list.forEach(a => rows.push([
     a.artist, a.album, a.year||'',
     a.cd?'oui':'', a.flac?'oui':'', a.mp3?'oui':'', a.digital?'oui':'',
     hasDigitalBackup(a)?'oui':'non',
-    a.note||'', a.discogsId||''
+    a.note||'', a.discogsId||'',
+    a.marketplace_price != null ? a.marketplace_price : ''
   ]));
   _csvDownload(`discographie_${new Date().toISOString().slice(0,10)}.csv`, rows);
   toast(`${list.length} entrées exportées ✓`);
@@ -10742,10 +10668,10 @@ function exportOkAlbumsCSV() {
   const list = albums.filter(a => a.okFolder)
     .filter(a => (!q||(a.artist+' '+a.album).toLowerCase().includes(q)) && (!af||a.artist.toLowerCase().includes(af)))
     .sort((a,b)=>a.artist.localeCompare(b.artist,'fr'));
-  const rows = [['Artiste','Album','Année','Supports','Note MB','Écoutes']];
+  const rows = [['Artiste','Album','Année','Supports','Note MB','Écoutes','Valeur DC']];
   list.forEach(a => {
     const sup = [a.cd?'CD':'',a.flac?'FLAC':'',a.mp3?'MP3':'',a.digital?'Digital':''].filter(Boolean).join('+');
-    rows.push([a.artist, a.album, a.year||'', sup, a.note||'', a.plays||0]);
+    rows.push([a.artist, a.album, a.year||'', sup, a.note||'', a.plays||0, a.marketplace_price != null ? a.marketplace_price : '']);
   });
   _csvDownload(`ok_albums_${new Date().toISOString().slice(0,10)}.csv`, rows);
   toast(`${list.length} albums exportés ✓`);
@@ -10758,10 +10684,10 @@ function exportForSaleCSV() {
   const list = albums.filter(a => a.forSale)
     .filter(a => (!q||(a.artist+' '+a.album).toLowerCase().includes(q)) && (!af||a.artist.toLowerCase().includes(af)))
     .sort((a,b)=>a.artist.localeCompare(b.artist,'fr'));
-  const rows = [['Artiste','Album','Année','Supports','Note MB','Discogs ID']];
+  const rows = [['Artiste','Album','Année','Supports','Note MB','Discogs ID','Valeur DC']];
   list.forEach(a => {
     const sup = [a.cd?'CD':'',a.flac?'FLAC':'',a.mp3?'MP3':'',a.digital?'Digital':''].filter(Boolean).join('+');
-    rows.push([a.artist, a.album, a.year||'', sup, a.note||'', a.discogsId||'']);
+    rows.push([a.artist, a.album, a.year||'', sup, a.note||'', a.discogsId||'', a.marketplace_price != null ? a.marketplace_price : '']);
   });
   _csvDownload(`a_vendre_${new Date().toISOString().slice(0,10)}.csv`, rows);
   toast(`${list.length} albums exportés ✓`);
@@ -11060,7 +10986,8 @@ function computeOutOfCollectionEntries() {
       const key = normalizeKey(r.artist, r.album);
       if (associatedRymKeys.has(key)) return;              // associé manuellement → possédé
       if (r.mb_release_id && ownedMbIds.has(r.mb_release_id)) return;
-      const entry = combined.get(key) || { artist: r.artist, album: r.album, year: '', genre: '', noteRYM: '', plays: 0 };
+      const entry = combined.get(key) || { artist: r.artist, album: r.album, year: '', genre: '', noteRYM: '', plays: 0, fromRym: false, fromLastfm: false };
+      entry.fromRym = true;
       if (r.rating) entry.noteRYM = r.rating;
       if (!entry.year && r.year) entry.year = r.year;
       if (!entry.genre && r.genre) entry.genre = r.genre;
@@ -11071,7 +10998,8 @@ function computeOutOfCollectionEntries() {
   // --- last.fm : réutilise computeMissing() (onglet Manquants), déjà dédupliqué/filtré non-possédé ---
   computeMissing().forEach(d => {
     const key = normalizeKey(d.artist, d.album);
-    const entry = combined.get(key) || { artist: d.artist, album: d.album, year: '', genre: '', noteRYM: '', plays: 0 };
+    const entry = combined.get(key) || { artist: d.artist, album: d.album, year: '', genre: '', noteRYM: '', plays: 0, fromRym: false, fromLastfm: false };
+    entry.fromLastfm = true;
     entry.plays = d.plays || 0;
     combined.set(key, entry);
   });
@@ -11092,10 +11020,20 @@ function exportOfflineAndroid() {
     plays: a.plays || 0,
     label: a.label || '', catno: a.catno || '',
     isCompilation: !!a.isCompilation,
-    outOfCollection: false,
+    kind: 'owned',
+    // Prix Discogs (demandé par Antoine) : prix le plus bas uniquement — médiane/plus haut
+    // non disponibles via l'API Discogs officielle documentée (seul /marketplace/stats est
+    // exposé, il ne renvoie que lowest_price/num_for_sale ; le "Low/Median/High" affiché sur
+    // les pages Discogs.com vient de l'historique des ventes, une fonctionnalité web only, pas
+    // exposée par l'API — confirmé au niveau du staff Discogs sur leur propre forum). Fiable
+    // (discogsId réel) pour un album possédé, donc pas de flag "approx" ici.
+    price: a.marketplace_price ?? null,
+    priceCurrency: a.marketplace_currency || 'EUR',
   }));
-  // Hors collection : RYM/last.fm sans DC/MB (pas d'album possédé, donc pas de note perso
-  // MusicBee ni de note Discogs personnelle — seule la note RYM et les écoutes last.fm existent).
+  // Découvertes RYM/last.fm : notés/scrobblés mais absents de la collection. `fromRym`/
+  // `fromLastfm` (calculés dans computeOutOfCollectionEntries) permettent d'inclure/exclure
+  // chaque source indépendamment côté export (demandé par Antoine), sans perdre les entrées
+  // présentes dans les deux à la fois. Pas de prix ici : ces entrées n'ont pas de discogsId.
   const extra = computeOutOfCollectionEntries().map(e => ({
     artist: e.artist, album: e.album,
     year: e.year || '', genre: e.genre || '',
@@ -11103,12 +11041,30 @@ function exportOfflineAndroid() {
     noteMB: 0, noteDiscogs: 0, noteRYM: e.noteRYM || '',
     plays: e.plays || 0,
     label: '', catno: '', isCompilation: false,
-    outOfCollection: true,
+    kind: 'discover',
+    fromRym: !!e.fromRym, fromLastfm: !!e.fromLastfm,
+    price: null, priceCurrency: '',
   }));
-  const fullList = [...list, ...extra];
+  // Wishlist : rubrique demandée par Antoine, absente jusqu'ici de l'export offline. Le prix
+  // (s'il existe) vient d'une correspondance Discogs approximative (fetchWishlistMarketplaceEstimates,
+  // pas de discogsId réel) — priceApprox:true propage cette réserve jusqu'au badge affiché.
+  const wish = wishlist.map(w => ({
+    artist: w.artist, album: w.album,
+    year: w.year || '', genre: '',
+    folders: [], format: '', cd: false,
+    noteMB: 0, noteDiscogs: 0, noteRYM: w.rymRating || '',
+    plays: w.plays || 0,
+    label: '', catno: '', isCompilation: false,
+    kind: 'wishlist',
+    notes: w.notes || '',
+    price: w.marketplace_price ?? null,
+    priceCurrency: w.marketplace_currency || 'EUR',
+    priceApprox: true,
+  }));
+  const fullList = [...list, ...extra, ...wish];
   const html = buildOfflineHtml(fullList);
   download(`collection-offline-${new Date().toISOString().slice(0,10)}.html`, html, 'text/html');
-  toast(`📱 Export offline créé — ${list.length} possédés + ${extra.length} hors collection (${Math.round(html.length/1024)} Ko)`);
+  toast(`📱 Export offline créé — ${list.length} possédés, ${extra.length} découvertes RYM/last.fm, ${wish.length} wishlist (${Math.round(html.length/1024)} Ko)`);
 }
 
 function buildOfflineHtml(list) {
@@ -11134,69 +11090,82 @@ function buildOfflineHtml(list) {
     '#list{padding:8px}',
     '.card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:7px}',
     '.card.oc{border-style:dashed;opacity:0.85}',
+    '.card.wish{border-color:var(--accent)}',
     '.title{font-size:14px;font-weight:600}',
     '.sub{font-size:12px;color:var(--text2);margin-top:2px}',
     '.badges{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}',
     '.badge{font-size:10px;padding:2px 6px;border-radius:4px;background:var(--bg3);color:var(--text2);border:1px solid var(--border)}',
     '.badge.oc{background:transparent;color:var(--amber);border-color:var(--amber)}',
+    '.badge.wish{background:transparent;color:var(--accent);border-color:var(--accent)}',
+    '.check{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px}',
     '.empty{text-align:center;color:var(--text3);padding:40px 10px;font-size:13px}',
     '</style>',
     '</head>',
     '<body>',
     '<header>',
     '<h1>🎵 Ma collection — hors ligne (généré le ' + esc(genDate) + ')</h1>',
-    '<div class="row"><input type="text" id="q" placeholder="Rechercher artiste / album…"></div>',
+    '<div class="row"><input type="text" id="f-artist" placeholder="Artiste…"><input type="text" id="f-album" placeholder="Album…"><input type="text" id="f-year" placeholder="Année…" style="max-width:90px"></div>',
     '<div class="row">',
     '<select id="f-folder"><option value="">Tous dossiers</option><option value="discographie">Discographie</option><option value="ok">Ok</option><option value="stock">Stock</option><option value="forsale">Vendre</option></select>',
-    '<select id="f-format"><option value="">Tous formats</option><option value="cd">CD</option><option value="flac">FLAC</option><option value="mp3">MP3</option><option value="digital">Digital</option></select>',
-    '<select id="f-status"><option value="">Collection + hors collection</option><option value="in">En collection seulement</option><option value="out">🔭 Hors collection seulement</option></select>',
-    '<select id="sort"><option value="artist">Tri : Artiste</option><option value="year">Tri : Année</option><option value="note">Tri : Note MB</option><option value="plays">Tri : Écoutes</option></select>',
+    '<select id="f-format"><option value="">Tous formats</option><option value="cd">💿 CD</option><option value="num">🖥 Numérique</option></select>',
+    '<select id="f-status"><option value="">Tout (collection + découvertes + wishlist)</option><option value="owned">En collection seulement</option><option value="discover">🔭 Découvertes RYM/last.fm</option><option value="wishlist">🎯 Wishlist</option></select>',
+    '<select id="sort"><option value="artist">Tri : Artiste</option><option value="year">Tri : Année</option><option value="note">Tri : Note MB</option><option value="plays">Tri : Écoutes</option><option value="price">Tri : Prix</option></select>',
     '</div>',
+    '<div class="row"><label class="check"><input type="checkbox" id="f-rym" checked> Inclure RYM</label><label class="check"><input type="checkbox" id="f-lastfm" checked> Inclure last.fm</label></div>',
     '<div id="counter"></div>',
     '</header>',
     '<div id="list"></div>',
     '<script>',
     'const DATA = ' + dataJson + ';',
-    "const q=document.getElementById('q'), fFolder=document.getElementById('f-folder'), fFormat=document.getElementById('f-format'), fStatus=document.getElementById('f-status'), sortSel=document.getElementById('sort'), listEl=document.getElementById('list'), counter=document.getElementById('counter');",
+    "const fArtist=document.getElementById('f-artist'), fAlbum=document.getElementById('f-album'), fYear=document.getElementById('f-year'), fFolder=document.getElementById('f-folder'), fFormat=document.getElementById('f-format'), fStatus=document.getElementById('f-status'), fRym=document.getElementById('f-rym'), fLastfm=document.getElementById('f-lastfm'), sortSel=document.getElementById('sort'), listEl=document.getElementById('list'), counter=document.getElementById('counter');",
     "function norm(s){return (s||'').toString().toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');}",
     "function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}",
     'function render(){',
-    '  const query=norm(q.value.trim());',
+    '  const qArtist=norm(fArtist.value.trim()), qAlbum=norm(fAlbum.value.trim()), qYear=fYear.value.trim();',
     '  const folder=fFolder.value, format=fFormat.value, status=fStatus.value, sort=sortSel.value;',
+    '  const rymOn=fRym.checked, lastfmOn=fLastfm.checked;',
     '  let rows=DATA.filter(function(a){',
-    "    if(query && norm(a.artist+' '+a.album).indexOf(query)===-1) return false;",
-    "    if(status==='in' && a.outOfCollection) return false;",
-    "    if(status==='out' && !a.outOfCollection) return false;",
+    '    if(qArtist && norm(a.artist).indexOf(qArtist)===-1) return false;',
+    '    if(qAlbum && norm(a.album).indexOf(qAlbum)===-1) return false;',
+    "    if(qYear && String(a.year||'').indexOf(qYear)===-1) return false;",
+    "    if(status && a.kind!==status) return false;",
+    "    if(a.kind==='discover' && !((a.fromRym&&rymOn)||(a.fromLastfm&&lastfmOn))) return false;",
     '    if(folder && (a.folders||[]).indexOf(folder)===-1) return false;',
     "    if(format==='cd' && !a.cd) return false;",
-    "    if(format && format!=='cd' && a.format!==format) return false;",
+    "    if(format==='num' && !(a.format==='flac'||a.format==='mp3'||a.format==='digital')) return false;",
     '    return true;',
     '  });',
     "  if(sort==='year') rows.sort(function(a,b){return (b.year||'').localeCompare(a.year||'');});",
     "  else if(sort==='note') rows.sort(function(a,b){return (b.noteMB||0)-(a.noteMB||0);});",
     "  else if(sort==='plays') rows.sort(function(a,b){return (b.plays||0)-(a.plays||0);});",
+    "  else if(sort==='price') rows.sort(function(a,b){return (b.price||0)-(a.price||0);});",
     "  else rows.sort(function(a,b){return a.artist.localeCompare(b.artist,'fr')||a.album.localeCompare(b.album,'fr');});",
     "  counter.textContent = rows.length.toLocaleString('fr-FR') + ' / ' + DATA.length.toLocaleString('fr-FR') + ' entrées';",
     '  const slice=rows.slice(0,300);',
     "  if(!slice.length){ listEl.innerHTML='<div class=\"empty\">Aucun résultat</div>'; return; }",
     '  listEl.innerHTML = slice.map(function(a){',
     '    const badges=[];',
-    "    if(a.outOfCollection) badges.push('<span class=\"badge oc\">🔭 Hors collection</span>');",
+    "    if(a.kind==='discover') badges.push('<span class=\"badge oc\">🔭 '+(a.fromRym&&a.fromLastfm?'RYM + last.fm':a.fromRym?'RYM':'last.fm')+'</span>');",
+    "    if(a.kind==='wishlist') badges.push('<span class=\"badge wish\">🎯 Wishlist</span>');",
     "    if(a.cd) badges.push('<span class=\"badge\">💿 CD</span>');",
-    "    if(a.format==='flac') badges.push('<span class=\"badge\">FLAC</span>');",
-    "    if(a.format==='mp3') badges.push('<span class=\"badge\">MP3</span>');",
-    "    if(a.format==='digital') badges.push('<span class=\"badge\">Digital</span>');",
+    "    if(a.format==='flac'||a.format==='mp3'||a.format==='digital') badges.push('<span class=\"badge\">🖥 Numérique</span>');",
     "    if(a.noteMB) badges.push('<span class=\"badge\">MB '+a.noteMB+'★</span>');",
     "    if(a.noteRYM) badges.push('<span class=\"badge\">RYM '+a.noteRYM+'</span>');",
     "    if(a.noteDiscogs) badges.push('<span class=\"badge\">Discogs '+a.noteDiscogs+'</span>');",
+    "    if(a.price!=null) badges.push('<span class=\"badge\" style=\"color:var(--accent);border-color:var(--accent)\">'+(a.priceApprox?'≈ ':'')+'💰 '+Number(a.price).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(a.priceCurrency==='EUR'?'€':(a.priceCurrency||''))+'</span>');",
     "    if(a.plays) badges.push('<span class=\"badge\">'+a.plays.toLocaleString('fr-FR')+' écoutes</span>');",
-    "    return '<div class=\"card'+(a.outOfCollection?' oc':'')+'\"><div class=\"title\">'+esc(a.album)+'</div><div class=\"sub\">'+esc(a.artist)+(a.year?' · '+esc(a.year):'')+(a.genre?' · '+esc(a.genre):'')+'</div><div class=\"badges\">'+badges.join('')+'</div></div>';",
+    "    const cls=a.kind==='discover'?' oc':a.kind==='wishlist'?' wish':'';",
+    "    return '<div class=\"card'+cls+'\"><div class=\"title\">'+esc(a.album)+'</div><div class=\"sub\">'+esc(a.artist)+(a.year?' · '+esc(a.year):'')+(a.genre?' · '+esc(a.genre):'')+'</div><div class=\"badges\">'+badges.join('')+'</div></div>';",
     "  }).join('') + (rows.length>300 ? '<div class=\"empty\">… '+(rows.length-300).toLocaleString('fr-FR')+' de plus — affine la recherche</div>' : '');",
     '}',
-    "q.addEventListener('input', render);",
+    "fArtist.addEventListener('input', render);",
+    "fAlbum.addEventListener('input', render);",
+    "fYear.addEventListener('input', render);",
     "fFolder.addEventListener('change', render);",
     "fFormat.addEventListener('change', render);",
     "fStatus.addEventListener('change', render);",
+    "fRym.addEventListener('change', render);",
+    "fLastfm.addEventListener('change', render);",
     "sortSel.addEventListener('change', render);",
     'render();',
     '<' + '/script>',
@@ -11944,8 +11913,9 @@ async function cleanupLastfmDuplicates() {
     if (Object.keys(_lastfmTrackCounts).length) {
       await window._sb.from('lastfm_tracks').delete().neq('artist', '___never___');
       const trackRows = Object.values(_lastfmTrackCounts).map(d => ({ artist: d.artist, track: d.track, album: d.album || '', plays: d.plays || 0 }));
-      // Bug corrigé v2026.07.15 : plus de découpage par tranches de 400 (cf. sbUpsert).
-      await window._sb.from('lastfm_tracks').upsert(trackRows, { onConflict: 'artist,track,album' });
+      for (let i = 0; i < trackRows.length; i += 400) {
+        await window._sb.from('lastfm_tracks').upsert(trackRows.slice(i, i + 400), { onConflict: 'artist,track,album' });
+      }
     }
     toast(`✓ last.fm nettoyé : ${removedAlbums} doublon(s) albums, ${removedTracks} doublon(s) morceaux fusionnés`);
   } catch (e) {
@@ -12188,17 +12158,6 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (action === 'wishlist')  setLastfmStatusWishlist(idx);
     else if (action === 'youtube')   { const m = _missingListCache[idx]; if(m) openYouTubeMusicSearch(m.artist, m.album); }
     else                             setLastfmStatusFromMissing(idx, action);
-  });
-  // Sélection multiple (cases à cocher par carte) — même délégation, événement 'change'
-  document.getElementById('missing-grid').addEventListener('change', function(e) {
-    const cb = e.target.closest('input.row-select-missing');
-    if (!cb) return;
-    const key = unsid(cb.dataset.key);
-    if (cb.checked) selectedMissingAlbumKeys.add(key); else selectedMissingAlbumKeys.delete(key);
-    renderMissingBulkBar();
-    const selAllCb = document.getElementById('select-all-missing');
-    if (selAllCb) selAllCb.checked = (_missingListCache || []).length > 0 &&
-      (_missingListCache || []).every(m => selectedMissingAlbumKeys.has(normalizeKey(m.artist, m.album)));
   });
 });
 
@@ -12873,11 +12832,6 @@ async function createSnapshot(label, payload) {
       label: label || 'Snapshot',
       data: finalPayload,
       counts: _snapshotCounts(finalPayload),
-      // Bug corrigé v2026.07.15 ("Invalid Date" dans le Journal) : sous le vrai Supabase, cette
-      // colonne avait `default now()` côté Postgres et se remplissait toute seule. Le shim LocalDB
-      // (IndexedDB) ne reproduit aucun défaut de colonne — created_at restait donc `undefined`,
-      // d'où l'"Invalid Date" affiché dans le sélecteur du Journal.
-      created_at: new Date().toISOString(),
     });
     if (error) throw error;
     await pruneOldSnapshots();
@@ -13203,13 +13157,8 @@ async function compareJournal() {
   const sel = document.getElementById('journal-snapshot-select');
   const status = document.getElementById('journal-status');
   const results = document.getElementById('journal-results');
-  const rawId = sel?.value;
-  if (!rawId) return;
-  // Bug corrigé v2026.07.15 ("Erreur : No rows found") : sel.value (attribut HTML <option value>)
-  // est TOUJOURS une chaîne, alors que collection_snapshots.id est un nombre côté LocalDB (shim
-  // IndexedDB) — celui-ci compare par égalité stricte (===), contrairement à Postgres qui aurait
-  // coercé "3" en 3 automatiquement. D'où l'échec systématique du .eq('id', id) ci-dessous.
-  const id = Number(rawId);
+  const id = sel?.value;
+  if (!id) return;
   status.textContent = 'Comparaison…';
   try {
     const { data, error } = await window._sb.from('collection_snapshots').select('created_at, label, data').eq('id', id).single();
@@ -14323,6 +14272,97 @@ async function fetchAllMarketplaceStats() {
   if (status) status.textContent = `Terminé — ${done - errors} estimé(s)${errors ? `, ${errors} erreur(s)` : ''}.`;
   if (btn) btn.disabled = false;
   toast(`Estimation terminée : ${done - errors}/${targets.length} CD`);
+}
+
+// Estimation Discogs scopée au dossier "Ok" (demandé par Antoine — les CD Ok sont déjà dans le
+// périmètre général de marketValueEligibleAlbums(), a.cd && a.discogsId ne filtre pas par
+// dossier, mais il n'existait aucun moyen de les cibler spécifiquement sans lancer le batch
+// complet de Valeur collection sur toute la collection). Même fonction fetchMarketplaceStats()
+// et même cadence (700ms) que fetchAllMarketplaceStats(), juste un périmètre restreint.
+async function fetchOkMarketplaceStats() {
+  const btn = document.getElementById('ok-price-fetch-btn');
+  const status = document.getElementById('ok-price-fetch-status');
+  const targets = albums.filter(a => a.okFolder && a.cd && a.discogsId && a.marketplace_price == null);
+  if (!targets.length) {
+    if (status) status.textContent = 'Tous les CD Ok catalogués Discogs sont déjà estimés.';
+    return;
+  }
+  if (btn) btn.disabled = true;
+  let done = 0, errors = 0;
+  for (const a of targets) {
+    if (status) status.textContent = `${done}/${targets.length} — ${a.artist} — ${a.album}`;
+    try {
+      await new Promise(r => setTimeout(r, 700));
+      const stats = await fetchMarketplaceStats(a.discogsId);
+      a.marketplace_price = stats.price;
+      a.marketplace_currency = stats.currency;
+      a.marketplace_num_for_sale = stats.numForSale;
+      a.marketplace_fetched_at = new Date().toISOString();
+    } catch (e) {
+      console.warn('fetchOkMarketplaceStats:', a.artist, '—', a.album, e.message || e);
+      errors++;
+    }
+    done++;
+    if (done % 10 === 0) { renderOkAlbums(); saveToStorage(); }
+  }
+  renderOkAlbums();
+  saveToStorage();
+  if (status) status.textContent = `Terminé — ${done - errors} estimé(s)${errors ? `, ${errors} erreur(s)` : ''}.`;
+  if (btn) btn.disabled = false;
+  toast(`Estimation Ok terminée : ${done - errors}/${targets.length} CD`);
+}
+
+// Estimation Discogs pour la wishlist (demandé par Antoine). Contrairement aux albums possédés,
+// une entrée wishlist n'a pas de discogsId — un release doit d'abord être trouvé par recherche
+// texte (searchDiscogs(), même branche Edge Function "discogs_search" que "IDs manquants") avant
+// de pouvoir en récupérer le prix. Résultat volontairement approximatif : on prend le 1er
+// résultat retourné par l'API Discogs (déjà trié par pertinence côté serveur), sans garantie
+// que ce soit exactement le même pressage — marqué marketplace_price_approx pour le signaler
+// partout où le prix est affiché (wishlist, export offline), à la différence d'un prix
+// d'album possédé qui provient d'un discogsId confirmé. 2 appels Edge Function par entrée
+// (recherche + stats) → pacing 700ms entre CHAQUE appel (pas juste entre entrées), pour rester
+// à la même cadence Discogs que les autres boucles de l'app.
+async function fetchWishlistMarketplaceEstimates() {
+  const btn = document.getElementById('wish-price-fetch-btn');
+  const status = document.getElementById('wish-price-fetch-status');
+  const targets = wishlist.filter(w => w.marketplace_price == null && !w.marketplace_no_match);
+  if (!targets.length) {
+    if (status) status.textContent = 'Toute la wishlist a déjà une estimation (ou aucune correspondance Discogs trouvée).';
+    return;
+  }
+  if (btn) btn.disabled = true;
+  let done = 0, matched = 0, errors = 0;
+  for (const w of targets) {
+    if (status) status.textContent = `${done}/${targets.length} — ${w.artist} — ${w.album}`;
+    try {
+      await new Promise(r => setTimeout(r, 700));
+      const results = await searchDiscogs(w.artist, w.album);
+      const best = results[0];
+      if (best) {
+        await new Promise(r => setTimeout(r, 700));
+        const stats = await fetchMarketplaceStats(best.id);
+        w.marketplace_price = stats.price;
+        w.marketplace_currency = stats.currency;
+        w.marketplace_matched_discogs_id = best.id;
+        w.marketplace_matched_title = best.title || '';
+        w.marketplace_price_approx = true;
+        w.marketplace_fetched_at = new Date().toISOString();
+        if (stats.price != null) matched++;
+      } else {
+        w.marketplace_no_match = true;
+      }
+    } catch (e) {
+      console.warn('fetchWishlistMarketplaceEstimates:', w.artist, '—', w.album, e.message || e);
+      errors++;
+    }
+    done++;
+    if (done % 10 === 0) { renderWishlist(); saveToStorage(); }
+  }
+  renderWishlist();
+  saveToStorage();
+  if (status) status.textContent = `Terminé — ${matched}/${targets.length} prix trouvé(s)${errors ? `, ${errors} erreur(s)` : ''}.`;
+  if (btn) btn.disabled = false;
+  toast(`Estimation wishlist : ${matched}/${targets.length} prix trouvés (approximatif — pressage non garanti)`);
 }
 
 // ===================== SCROBBLES RÉCENTS (Session notation) =====================
