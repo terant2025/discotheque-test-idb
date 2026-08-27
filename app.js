@@ -8167,7 +8167,7 @@ function unmarkForSale(id) {
   if (!a) return;
   a.forSale = false;
   if (a.folders) a.folders = a.folders.filter(f => f !== 'forsale');
-  invalidateCache(); saveToStorage(); renderForSale(); renderAlbums(); updateNavBadges();
+  invalidateCache(); saveToStorage(); renderDiscographie(); renderForSale(); renderAlbums(); updateNavBadges();
 }
 
 // ===================== ALL TRACKS =====================
@@ -9568,7 +9568,7 @@ function renderDiscographie() {
       </td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px;align-items:center">
         ${assocBtn}${unlinkBtn}
-        <button class="btn btn-sm" onclick="event.stopPropagation();markForSale('${safeId}')" title="${a.forSale?'Déjà à vendre':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
+        <button class="btn btn-sm" onclick="event.stopPropagation();${a.forSale?'unmarkForSale':'markForSale'}('${safeId}')" title="${a.forSale?'Retirer de la vente':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
       </td>
     </tr>`;
   }).join('');
