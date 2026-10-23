@@ -14751,6 +14751,7 @@ function renderRatingSession() {
     document.getElementById('rs-plays').textContent = plays ? `${plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
     if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
     if (tracklistWrapEl) tracklistWrapEl.style.display = 'none';
+    rsRenderFolderInfo(null);
     document.getElementById('rs-stars').innerHTML = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   } else {
     const a = albums.find(x => x.id === queue[0]);
@@ -14761,6 +14762,7 @@ function renderRatingSession() {
     document.getElementById('rs-artist').textContent = a.artist;
     document.getElementById('rs-meta').textContent = [a.year, a.genre].filter(Boolean).join(' · ');
     document.getElementById('rs-plays').textContent = a.plays ? `${a.plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
+    rsRenderFolderInfo(a);
 
     // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso.
     // BUG CORRIGÉ (v2026.07.10-26) : a.id manquant ici empêchait lookupRym() de retomber sur une
@@ -14785,6 +14787,121 @@ function renderRatingSession() {
 
     // Notation album en demi-étoiles (comme les pistes), pas seulement des étoiles entières
     document.getElementById('rs-stars').innerHTML = bigHalfStarsHtml(a.note || 0);
+  }
+}
+
+// ── Dossier + actions contextuelles + copie (Session notation, v2026.10.23-01) ──────────────
+// Demandé par Antoine : voir dans quel dossier se trouve l'album courant, pouvoir le passer
+// « à vendre » (s'il est en Discographie) ou en wishlist (s'il est en Stock/Ok — même règle que
+// le bouton 🎯 de la Collection) sans quitter la session, et copier artiste/titre pour lancer
+// une recherche ailleurs (Discogs, RYM…). Les actions réutilisent markForSale/unmarkForSale et
+// addToWishlistFromAlbumId — aucune logique de dossier dupliquée ; rien n'est déplacé côté
+// MusicBee (seul le flag « forsale » de l'app change, comme partout ailleurs).
+const RS_FOLDER_LABELS = {
+  discographie: '🎵 Discographie', stock: '📦 Stock', ok: '✅ Ok', forsale: '💸 À vendre', album: '💾 Album'
+};
+
+function rsCurrentAlbum() {
+  if (ratingSessionMode !== 'albums') return null;
+  const id = ratingQueue[0];
+  return id ? albums.find(x => x.id === id) || null : null;
+}
+
+function rsRenderFolderInfo(a) {
+  const infoEl = document.getElementById('rs-folder-info');
+  const actEl = document.getElementById('rs-folder-actions');
+  if (!a) {
+    if (infoEl) { infoEl.style.display = 'none'; infoEl.innerHTML = ''; }
+    if (actEl) actEl.innerHTML = '';
+    return;
+  }
+  const f = a.folders || [];
+  const isDisco = f.includes('discographie') || a.primaryFolder === 'discographie';
+  const isStock = f.includes('stock') || a.primaryFolder === 'stock';
+  const isOk = !!a.okFolder || f.includes('ok');
+  const isForSale = !!a.forSale || f.includes('forsale');
+  const inWish = wishlist.some(w => normalizeKey(w.artist, w.album) === normalizeKey(a.artist, a.album));
+
+  const tags = [];
+  if (isDisco) tags.push('discographie');
+  if (isStock) tags.push('stock');
+  if (isOk) tags.push('ok');
+  if (isForSale) tags.push('forsale');
+  if (!tags.length) tags.push('album');
+  const chips = tags.map(t => `<span class="badge badge-stock">${RS_FOLDER_LABELS[t]}</span>`);
+  if (a.cd || a.has_cd) chips.push('<span class="badge badge-cd">💿 CD</span>');
+  if (inWish) chips.push('<span class="badge badge-stock" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>');
+  if (infoEl) {
+    infoEl.style.display = 'flex';
+    infoEl.innerHTML = `<span style="font-size:11px;color:var(--text3)">Dossier :</span>${chips.join('')}`;
+  }
+
+  if (actEl) {
+    const btns = [];
+    if (isDisco) {
+      btns.push(isForSale
+        ? `<button class="btn btn-accent" onclick="rsToggleForSale()" title="Retirer de la vente">💸 À vendre ✓</button>`
+        : `<button class="btn" onclick="rsToggleForSale()" title="Marquer à vendre">💸 À vendre</button>`);
+    }
+    if (isStock || isOk) {
+      btns.push(inWish
+        ? `<button class="btn btn-accent" onclick="rsToggleWishlist()" title="Retirer de la wishlist">🎯 Wishlist ✓</button>`
+        : `<button class="btn" onclick="rsToggleWishlist()" title="Ajouter à la wishlist">🎯 Wishlist</button>`);
+    }
+    actEl.innerHTML = btns.join('');
+  }
+}
+
+function rsToggleForSale() {
+  const a = rsCurrentAlbum();
+  if (!a) return;
+  if (a.forSale || (a.folders || []).includes('forsale')) {
+    unmarkForSale(sid(a.id));
+    toast(`${a.artist} — ${a.album} retiré de la vente`);
+  } else {
+    markForSale(sid(a.id));
+  }
+  rsRenderFolderInfo(a);
+}
+
+function rsToggleWishlist() {
+  const a = rsCurrentAlbum();
+  if (!a) return;
+  const key = normalizeKey(a.artist, a.album);
+  if (wishlist.some(w => normalizeKey(w.artist, w.album) === key)) {
+    wishlist = wishlist.filter(w => normalizeKey(w.artist, w.album) !== key);
+    updateNavBadges();
+    saveToStorage();
+    toast(`Retiré de la wishlist : ${a.artist} — ${a.album}`);
+  } else {
+    addToWishlistFromAlbumId(sid(a.id));
+  }
+  rsRenderFolderInfo(a);
+}
+
+// Copie le texte d'un champ (titre ou artiste) dans le presse-papiers. navigator.clipboard exige
+// un contexte sécurisé (OK sur GitHub Pages en https) ; repli execCommand pour les autres cas.
+function rsCopyField(elId) {
+  const text = (document.getElementById(elId)?.textContent || '').trim();
+  if (!text) return;
+  const done = () => toast(`Copié : ${text}`);
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      ok ? done() : toast('Copie impossible dans ce navigateur', 'error');
+    } catch (e) { toast('Copie impossible dans ce navigateur', 'error'); }
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, fallback);
+  } else {
+    fallback();
   }
 }
 
