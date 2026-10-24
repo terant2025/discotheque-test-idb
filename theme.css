@@ -1,0 +1,40 @@
+/* Thème clair — v2026.10.24-02.
+   Redéfinit uniquement les variables de styles.css (inchangé) quand <html data-theme="light">.
+   Le thème est posé par un petit script en tête de index.html avant le premier rendu
+   (choix mémorisé dans localStorage « terant_theme », sinon préférence système), puis
+   basculé par toggleTheme() (bouton ☀️/🌙 de la topbar, ou Ctrl+K « thème »). */
+
+:root { color-scheme: dark; }
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f3ef;
+  --bg2: #ffffff;
+  --bg3: #eceae4;
+  --bg4: #e1ded6;
+  --border: #d9d5cc;
+  --border2: #c3beb2;
+  --text: #1c1c22;
+  --text2: #54545e;
+  --text3: #85858f;
+  --accent: #4a7300;
+  --accent2: #3b5c00;
+  --accent-dim: rgba(74,115,0,0.12);
+  --accent-dim2: rgba(74,115,0,0.06);
+  --red: #c93434;
+  --red-dim: rgba(201,52,52,0.10);
+  --amber: #a86a00;
+  --amber-dim: rgba(168,106,0,0.12);
+  --blue: #1f66b3;
+  --blue-dim: rgba(31,102,179,0.10);
+  --purple: #6b45c9;
+  --purple-dim: rgba(107,69,201,0.10);
+}
+
+/* Ajustements ponctuels là où styles.css (ou du style inline) suppose un fond sombre */
+:root[data-theme="light"] .btn-accent { color: #ffffff; }
+:root[data-theme="light"] .modal-overlay { background: rgba(28,28,34,0.35); }
+:root[data-theme="light"] .toast { box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
+:root[data-theme="light"] .modal { box-shadow: 0 12px 40px rgba(0,0,0,0.18); }
+:root[data-theme="light"] .badge-stock { background: rgba(0,0,0,0.04); }
+:root[data-theme="light"] #search-menu { box-shadow: 0 6px 24px rgba(0,0,0,0.15) !important; }

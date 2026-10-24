@@ -1622,6 +1622,8 @@ function toast(msg, type = 'success') {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.className = 'toast show ' + type;
+  el.style.pointerEvents = '';
+  if (typeof _undoAction !== 'undefined') _undoAction = null;
   clearTimeout(el._t);
   el._t = setTimeout(() => el.classList.remove('show'), 3000);
 }
@@ -1932,7 +1934,8 @@ function _gsRun() {
     .sort((a, b) => _gsScore(a.artist + ' ' + a.title, q) - _gsScore(b.artist + ' ' + b.title, q))
     .slice(0, 6);
 
-  const total = albumMatches.length + trackMatches.length + wishAlbumMatches.length + wishTrackMatches.length;
+  const cmdMatches = gsMatchCommands(raw);
+  const total = cmdMatches.length + albumMatches.length + trackMatches.length + wishAlbumMatches.length + wishTrackMatches.length;
   if (!total) {
     results.innerHTML = '<div class="empty" style="padding:24px 0"><div class="empty-icon">🕳️</div>Aucun résultat pour « ' + esc(raw) + ' ».</div>';
     return;
@@ -1963,6 +1966,9 @@ function _gsRun() {
     </div>`;
 
   results.innerHTML =
+    section('Actions', '⚡', cmdMatches.map(m =>
+      gsRow(`${m.c.icon} ${esc(m.c.label)}`, '', '↵', `runGsCommand(${m.i})`)
+    )) +
     section('Albums', '💽', albumMatches.map(a =>
       gsRow(esc(a.album), esc(a.artist) + (a.year ? ' · ' + a.year : ''), folderBadge(a), `jumpToGlobalSearchAlbum('${a.id}')`)
     )) +
@@ -1975,6 +1981,8 @@ function _gsRun() {
     section('Wishlist — morceaux', '🎯', wishTrackMatches.map(w =>
       gsRow(esc(w.title), esc(w.artist), ({high:'🔴',mid:'🟡',low:'🟢'})[w.prio] || '', `jumpToGlobalSearchWishTrack(${w.id})`)
     ));
+  _gsActiveIdx = 0;
+  gsHighlight(0);
 }
 
 function jumpToGlobalSearchAlbum(id) {
@@ -2166,7 +2174,7 @@ const FILTER_PRESET_VIEWS = {
     selectId: 'filter-preset-select-wish',
     resetPage: false,
     renderFn: () => renderWishlist(),
-    fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio'],
+    fields: ['filter-wish-artist', 'filter-wish-album', 'filter-wish-source', 'filter-wish-year', 'filter-wish-prio', 'filter-wish-deal'],
     noteOpPairs: []
   },
   rym: {
@@ -2545,6 +2553,7 @@ function renderAlbums() {
     tbody.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="empty-icon">📀</div>Aucun album trouvé</div></td></tr>';
     document.getElementById('page-info').textContent = '';
     renderBulkActionsBar();
+    renderMosaic('collection', []);
     return;
   }
 
@@ -2639,6 +2648,7 @@ function renderAlbums() {
   }).join('');
 
   document.getElementById('page-info').textContent = `Page ${currentPage} / ${pages} — ${total} albums`;
+  renderMosaic('collection', slice);
   renderBulkActionsBar();
   const selAllCb = document.getElementById('select-all-albums');
   if (selAllCb) selAllCb.checked = slice.length > 0 && slice.every(a => selectedAlbumIds.has(a.id));
@@ -2733,7 +2743,9 @@ function rateAlbum(id, note) {
   const realId = unsid(id);
   const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (a) {
+    const snap = noteUndoSnapshot(a);
     a.note = a.note === note ? 0 : note;
+    toastUndo(`${a.album} : note ${a.note ? a.note + '★' : 'retirée'}`, () => { restoreNoteSnapshot(snap); renderAlbums(); updateNavBadges(); });
     // v2026.07.09 : la notation classique (clic étoiles Collection) alimente désormais
     // "Notes à reporter" au même titre que la Session notation — jusqu'ici scopée à cette
     // dernière (cf. todo section 10, "actuellement scopé à la Session notation uniquement").
@@ -2778,6 +2790,7 @@ function promptStockRating(id) {
   if (!a) return;
   const raw = prompt('Note MusicBee (0 à 5, demi-étoiles possibles) :', a.note || '');
   if (raw === null) return;
+  const snap = noteUndoSnapshot(a);
   const trimmed = raw.trim().replace(',', '.');
   if (trimmed === '') { a.note = 0; }
   else {
@@ -2789,6 +2802,7 @@ function promptStockRating(id) {
   renderAlbums();
   if (typeof renderStock === 'function') renderStock();
   saveToStorage();
+  if (a.note !== snap.prev) toastUndo(`${a.album} : note ${a.note ? a.note + '★' : 'retirée'}`, () => { restoreNoteSnapshot(snap); renderAlbums(); if (typeof renderStock === 'function') renderStock(); updateNavBadges(); });
 }
 
 // deleteAlbum supprimée (v2026.07.10-03) — plus aucun bouton n'y mène ; les
@@ -6923,14 +6937,22 @@ async function fetchSingleMarketplaceEstimate(idSid) {
 // — le bouton de traitement en masse de la wishlist couvre déjà le nouvel essai). Toujours
 // préfixé "≈" quand un prix est affiché, pour rappeler que ce n'est pas un pressage confirmé.
 function wishlistValueCell(w) {
-  if (w.marketplace_no_match) return `<span style="color:var(--text3);font-size:11px" title="Aucun résultat Discogs pour cette recherche">∅</span>`;
-  if (w.marketplace_price != null) {
+  // v2026.10.24-02 : prix cible (w.targetPrice) affiché sous l'estimation, 🔥 si l'estimation
+  // passe sous le seuil ; clic sur la cellule pour fixer/modifier le prix cible.
+  const fmt = n => Number(n).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let main;
+  if (w.marketplace_no_match) main = `<span style="color:var(--text3);font-size:11px" title="Aucun résultat Discogs pour cette recherche">∅</span>`;
+  else if (w.marketplace_price != null) {
     const cur = w.marketplace_currency === 'EUR' ? '€' : (w.marketplace_currency || '');
     const age = w.marketplace_fetched_at ? formatProvenanceAge(w.marketplace_fetched_at) : '';
     const tip = (age ? 'Estimé ' + age : '') + ' — correspondance approximative (' + (w.marketplace_matched_title || '?') + '), pressage non garanti';
-    return `<span title="${esc(tip)}" style="font-family:var(--mono);font-size:12px;color:var(--accent)">≈ ${Number(w.marketplace_price).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}</span>`;
-  }
-  return `<span style="color:var(--text3);font-size:11px">–</span>`;
+    const deal = wishIsDeal(w);
+    main = `<span title="${esc(tip)}" style="font-family:var(--mono);font-size:12px;color:${deal ? 'var(--amber)' : 'var(--accent)'};font-weight:${deal ? 600 : 400}">${deal ? '🔥 ' : ''}≈ ${fmt(w.marketplace_price)} ${cur}</span>`;
+  } else main = `<span style="color:var(--text3);font-size:11px">–</span>`;
+  const target = w.targetPrice != null
+    ? `<div style="font-family:var(--mono);font-size:10px;color:var(--text3)">cible ≤ ${fmt(w.targetPrice)} €</div>`
+    : `<div style="font-size:10px;color:var(--text3);opacity:0.6">+ prix cible</div>`;
+  return `<div onclick="event.stopPropagation();promptWishTarget(${w.id})" style="cursor:pointer" title="Cliquer pour définir le prix cible (bon plan 🔥 quand l'estimation passe dessous)">${main}${target}</div>`;
 }
 // pas de discogsId du tout → "–" neutre (pas le sujet ici, cf. onglet "IDs manquants") ; ID
 // présent mais jamais estimé/estimation ratée → badge cliquable "⚠️ Sans estimation" qui
@@ -7959,11 +7981,18 @@ function addToWishlist(artist, album, year, source, plays, rymRating, notes) {
   let prio = 'low';
   if (plays >= 50 || rymRating >= 4) prio = 'high';
   else if (plays >= 10 || rymRating >= 3.5) prio = 'mid';
-  wishlist.push({ id: uid(), artist, album, year: year || '', source: source || 'manual',
+  const newId = uid();
+  wishlist.push({ id: newId, artist, album, year: year || '', source: source || 'manual',
     prio, plays: plays || 0, rymRating: rymRating || 0, notes: notes || '', addedAt: Date.now() });
   updateNavBadges();
   saveToStorage();
-  toast(`Ajouté à la wishlist : ${artist} — ${album}`);
+  toastUndo(`Ajouté à la wishlist : ${artist} — ${album}`, () => {
+    wishlist = wishlist.filter(w => w.id !== newId);
+    // le statut last.fm « wishlist » éventuellement posé en même temps n'a plus lieu d'être
+    const k = normalizeKey(artist, album);
+    if (_lastfmStatus[k] === 'wishlist') delete _lastfmStatus[k];
+    invalidateCache(); saveToStorage(); refreshVisibleViews();
+  });
 }
 
 
@@ -7975,6 +8004,8 @@ function openWishModal(id) {
   document.getElementById('wish-f-year').value   = w?.year   || '';
   document.getElementById('wish-f-prio').value   = w?.prio   || 'mid';
   document.getElementById('wish-f-notes').value  = w?.notes  || '';
+  const tf = document.getElementById('wish-f-target');
+  if (tf) tf.value = w?.targetPrice != null ? String(w.targetPrice).replace('.', ',') : '';
   document.getElementById('modal-wish').classList.add('open');
 }
 
@@ -7986,25 +8017,38 @@ function saveWish() {
   const year  = document.getElementById('wish-f-year').value.trim();
   const prio  = document.getElementById('wish-f-prio').value;
   const notes = document.getElementById('wish-f-notes').value.trim();
+  const tRaw = (document.getElementById('wish-f-target')?.value || '').trim().replace(',', '.');
+  const targetPrice = tRaw === '' ? undefined : parseFloat(tRaw);
+  if (targetPrice !== undefined && (isNaN(targetPrice) || targetPrice < 0)) { toast('Prix cible invalide', 'warn'); return; }
   if (id) {
     const w = wishlist.find(x => x.id == id);
-    if (w) Object.assign(w, { artist, album, year, prio, notes });
+    if (w) {
+      Object.assign(w, { artist, album, year, prio, notes });
+      if (targetPrice === undefined) delete w.targetPrice; else w.targetPrice = Math.round(targetPrice * 100) / 100;
+    }
   } else {
     const key = normalizeKey(artist, album);
     if (wishlist.find(w => normalizeKey(w.artist, w.album) === key)) {
       toast('Déjà dans la wishlist', 'warn'); return;
     }
-    wishlist.push({ id: uid(), artist, album, year, source: 'manual', prio, plays: 0, rymRating: (lookupRym(artist, album) || lookupRym(cleanDiscogsArtist(artist), album))?.rating || 0, notes, addedAt: Date.now() });
+    wishlist.push({ id: uid(), artist, album, year, source: 'manual', prio, plays: 0, rymRating: (lookupRym(artist, album) || lookupRym(cleanDiscogsArtist(artist), album))?.rating || 0, notes, addedAt: Date.now(), ...(targetPrice !== undefined ? { targetPrice: Math.round(targetPrice * 100) / 100 } : {}) });
   }
   document.getElementById('modal-wish').classList.remove('open');
   renderWishlist(); updateNavBadges(); saveToStorage();
 }
 
 function deleteWish(id) {
-  if (!confirm('Retirer de la wishlist ?')) return;
-  wishlist = wishlist.filter(w => w.id !== id);
+  const idx = wishlist.findIndex(w => w.id === id);
+  if (idx === -1) return;
+  const entry = wishlist[idx];
+  wishlist.splice(idx, 1);
   selectedWishIds.delete(id);
   renderWishlist(); updateNavBadges(); saveToStorage();
+  // Plus de confirm() : la suppression est annulable depuis le toast (v2026.10.24-02)
+  toastUndo(`Retiré de la wishlist : ${entry.artist} — ${entry.album}`, () => {
+    wishlist.splice(Math.min(idx, wishlist.length), 0, entry);
+    saveToStorage(); refreshVisibleViews();
+  });
 }
 
 // markWishAcquired supprimée (v2026.07.10-03) : ouvrait la modale d'ajout manuel
@@ -8173,7 +8217,7 @@ function renderForSale() {
   </tr>`).join('');
 }
 
-function markForSale(id) {
+function markForSale(id, opts) {
   const realId = unsid(id);
   const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (!a) return;
@@ -8181,15 +8225,19 @@ function markForSale(id) {
   if (!a.folders) a.folders = [];
   if (!a.folders.includes('forsale')) a.folders.push('forsale');
   invalidateCache(); saveToStorage(); renderDiscographie(); renderForSale(); renderAlbums(); updateNavBadges();
-  toast(`${a.artist} — ${a.album} marqué à vendre`);
+  if (document.getElementById('sec-ratesession')?.classList.contains('active')) rsRenderFolderInfo(rsCurrentAlbum());
+  if (!opts?.silent) toastUndo(`${a.artist} — ${a.album} marqué à vendre`, () => unmarkForSale(id, { silent: true }));
 }
-function unmarkForSale(id) {
+// opts.silent : pas de toast (appel depuis une annulation ou depuis confirmSale qui a le sien)
+function unmarkForSale(id, opts) {
   const realId = unsid(id);
   const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (!a) return;
   a.forSale = false;
   if (a.folders) a.folders = a.folders.filter(f => f !== 'forsale');
   invalidateCache(); saveToStorage(); renderDiscographie(); renderForSale(); renderAlbums(); updateNavBadges();
+  if (document.getElementById('sec-ratesession')?.classList.contains('active')) rsRenderFolderInfo(rsCurrentAlbum());
+  if (!opts?.silent) toastUndo(`${a.artist} — ${a.album} retiré de la vente`, () => markForSale(id, { silent: true }));
 }
 
 // ===================== ALL TRACKS =====================
@@ -8916,8 +8964,12 @@ function wishFilteredList() {
   const sf   = document.getElementById('filter-wish-source')?.value || '';
   const pf   = document.getElementById('filter-wish-prio')?.value   || '';
   const yf   = (document.getElementById('filter-wish-year')?.value  || '').trim();
+  const df   = document.getElementById('filter-wish-deal')?.value || '';
 
   return wishlist.filter(w => {
+    if (df === 'deal' && !wishIsDeal(w)) return false;
+    if (df === 'target' && w.targetPrice == null) return false;
+    if (df === 'notarget' && w.targetPrice != null) return false;
     return (!q    || (w.artist+' '+w.album).toLowerCase().includes(q))
         && (!af   || w.artist.toLowerCase().includes(af))
         && (!albf || w.album.toLowerCase().includes(albf))
@@ -8925,6 +8977,7 @@ function wishFilteredList() {
         && (!pf   || w.prio   === pf)
         && (!yf   || (w.year||'').startsWith(yf));
   }).sort((a, b) => {
+    if (wishIsDeal(a) !== wishIsDeal(b)) return wishIsDeal(a) ? -1 : 1; // bons plans en tête
     const po = { high: 0, mid: 1, low: 2 };
     if (po[a.prio] !== po[b.prio]) return po[a.prio] - po[b.prio];
     return wishPlays(b) - wishPlays(a);
@@ -8936,7 +8989,7 @@ function renderWishlist() {
   const list = wishFilteredList();
 
   const ctr = document.getElementById('wish-counter');
-  if (ctr) ctr.textContent = list.length + ' / ' + wishlist.length + ' entrées';
+  if (ctr) { const nd = wishDealsCount(); ctr.textContent = list.length + ' / ' + wishlist.length + ' entrées' + (nd ? ` · 🔥 ${nd} bon${nd > 1 ? 's' : ''} plan${nd > 1 ? 's' : ''}` : ''); }
 
   const tbody = document.getElementById('wish-tbody');
   if (!list.length) {
@@ -9507,6 +9560,7 @@ function renderDiscographie() {
   if (!slice.length) {
     tbody.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="empty-icon">📀</div>Aucune entrée</div></td></tr>';
     document.getElementById('disco-page-info').textContent = '';
+    renderMosaic('discographie', []);
   // updateNavBadges called by saveToStorage
     renderBulkActionsBar();
     return;
@@ -9597,6 +9651,7 @@ function renderDiscographie() {
   }).join('');
 
   document.getElementById('disco-page-info').textContent = `Page ${discoPage} / ${pages} — ${total} entrées`;
+  renderMosaic('discographie', slice);
   updateNavBadges();
   renderBulkActionsBar();
   const selAllDiscoCb = document.getElementById('select-all-disco');
@@ -10327,7 +10382,7 @@ function resetStockFilters() {
 
 function resetWishlistFilters() {
   ['filter-wish-artist', 'filter-wish-album', 'filter-wish-year'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  ['filter-wish-source', 'filter-wish-prio'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['filter-wish-source', 'filter-wish-prio', 'filter-wish-deal'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   renderWishlist();
 }
 
@@ -14448,7 +14503,8 @@ async function fetchWishlistMarketplaceEstimates() {
   saveToStorage();
   if (status) status.textContent = `Terminé — ${matched}/${targets.length} prix trouvé(s)${errors ? `, ${errors} erreur(s)` : ''}.`;
   if (btn) btn.disabled = false;
-  toast(`Estimation wishlist : ${matched}/${targets.length} prix trouvés (approximatif — pressage non garanti)`);
+  const nd = wishDealsCount();
+  toast(`Estimation wishlist : ${matched}/${targets.length} prix trouvés (approximatif — pressage non garanti)${nd ? ` · 🔥 ${nd} bon${nd > 1 ? 's' : ''} plan${nd > 1 ? 's' : ''} sous ton prix cible` : ''}`);
 }
 
 // ===================== SCROBBLES RÉCENTS (Session notation) =====================
@@ -14888,7 +14944,6 @@ function rsToggleForSale() {
   if (!a) return;
   if (a.forSale || (a.folders || []).includes('forsale')) {
     unmarkForSale(sid(a.id));
-    toast(`${a.artist} — ${a.album} retiré de la vente`);
   } else {
     markForSale(sid(a.id));
   }
@@ -14900,10 +14955,13 @@ function rsToggleWishlist() {
   if (!a) return;
   const key = normalizeKey(a.artist, a.album);
   if (wishlist.some(w => normalizeKey(w.artist, w.album) === key)) {
+    const removed = wishlist.filter(w => normalizeKey(w.artist, w.album) === key);
     wishlist = wishlist.filter(w => normalizeKey(w.artist, w.album) !== key);
     updateNavBadges();
     saveToStorage();
-    toast(`Retiré de la wishlist : ${a.artist} — ${a.album}`);
+    toastUndo(`Retiré de la wishlist : ${a.artist} — ${a.album}`, () => {
+      wishlist.push(...removed); saveToStorage(); refreshVisibleViews();
+    });
   } else {
     addToWishlistFromAlbumId(sid(a.id));
   }
@@ -14942,21 +15000,31 @@ function rsRateCurrent(note) {
     if (!id) return;
     const t = tracks.find(x => x.id === id);
     if (!t) return;
+    const snap = noteUndoSnapshot(t);
     t.note = note;
     queueNoteToReport('track', t, note);
     saveToStorage();
     ratingQueueTracks.shift();
-    toast(`${t.title} noté ${note}★`);
+    toastUndo(`${t.title} noté ${note}★`, () => {
+      restoreNoteSnapshot(snap);
+      ratingQueueTracks = ratingQueueTracks.filter(x => x !== id); ratingQueueTracks.unshift(id);
+      renderRatingSession(); updateNavBadges();
+    });
   } else {
     const id = ratingQueue[0];
     if (!id) return;
     const a = albums.find(x => x.id === id);
     if (!a) return;
+    const snap = noteUndoSnapshot(a);
     a.note = note;
     queueNoteToReport('album', a, note);
     saveToStorage();
     ratingQueue.shift();
-    toast(`${a.album} noté ${note}★`);
+    toastUndo(`${a.album} noté ${note}★`, () => {
+      restoreNoteSnapshot(snap);
+      ratingQueue = ratingQueue.filter(x => x !== id); ratingQueue.unshift(id);
+      renderRatingSession(); updateNavBadges();
+    });
   }
   renderRatingSession();
 }
@@ -16778,8 +16846,9 @@ function confirmSale() {
   if (raw === '' || isNaN(price) || price < 0) { toast('Prix de vente invalide', 'warn'); return; }
   const channel = document.getElementById('sale-channel').value || '';
   try { localStorage.setItem('terant_last_sale_channel', channel); } catch (e) {}
+  const saleId = 'sale_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   salesLog.push({
-    id: 'sale_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    id: saleId,
     albumId: a.id, artist: a.artist, album: a.album, year: a.year || '',
     label: a.label || '', catno: a.catno || '', discogsId: a.discogsId || '',
     price: Math.round(price * 100) / 100, currency: 'EUR',
@@ -16789,9 +16858,14 @@ function confirmSale() {
     cover_url: a.cover_url || null,
   });
   // Retire le flag « à vendre » (même mutation que unmarkForSale, qui sauvegarde et rafraîchit)
-  unmarkForSale(sid(a.id));
+  unmarkForSale(sid(a.id), { silent: true });
   closeSaleModal();
-  toast(`Vente enregistrée : ${a.artist} — ${a.album} (${price.toFixed(2)} €)`);
+  toastUndo(`Vente enregistrée : ${a.artist} — ${a.album} (${price.toFixed(2)} €)`, () => {
+    salesLog = salesLog.filter(x => x.id !== saleId);
+    markForSale(sid(a.id), { silent: true });
+    if (_forSaleTab === 'history') renderSalesHistory();
+    renderSalesSummary();
+  });
   if (_forSaleTab === 'history') renderSalesHistory();
   renderSalesSummary();
 }
@@ -17256,6 +17330,272 @@ function exportTopsCSV() {
     rows.push([i + 1, r.artist, _topsType === 'artists' ? '' : r.name, r.plays, (_topsType === 'artists' ? r.ownedCount : !!r.owned) ? 'oui' : 'non', r.genre || '', r.year || '']);
   });
   download(`tops_${_topsType}_${range.key}.csv`, '﻿' + rows.map(toCSVRow).join('\n'), 'text/csv;charset=utf-8');
+}
+
+// ===================== TOAST « ANNULER » (v2026.10.24-02) =====================
+// Les actions rapides (à vendre, wishlist, note, vente, retrait de wishlist) sont annulables
+// pendant 6 s depuis le toast (bouton « ↶ Annuler » ou Ctrl/Cmd+Z hors champ de saisie).
+// Une seule action annulable à la fois : toute nouvelle action (ou un toast simple) remplace la
+// précédente. Chaque appelant fournit sa propre fonction inverse — pas de snapshot global de
+// la collection (trop lourd à 2 600 albums), juste l'état précis qui a changé.
+let _undoAction = null;
+
+function toastUndo(msg, undoFn, type = 'success') {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  const b = document.createElement('button');
+  b.className = 'btn btn-sm';
+  b.textContent = '↶ Annuler';
+  b.style.marginLeft = '12px';
+  b.onclick = runUndo;
+  el.append(span, b);
+  el.className = 'toast show ' + type;
+  el.style.pointerEvents = 'auto';
+  _undoAction = undoFn;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.classList.remove('show'); el.style.pointerEvents = ''; _undoAction = null; }, 6000);
+}
+
+function runUndo() {
+  const fn = _undoAction;
+  _undoAction = null;
+  if (!fn) return;
+  try { fn(); } catch (e) { console.error('Annulation échouée', e); toast('Annulation impossible : ' + (e.message || e), 'error'); return; }
+  toast('↶ Action annulée');
+}
+
+document.addEventListener('keydown', e => {
+  if (!_undoAction || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey) return;
+  const tag = (e.target?.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+  e.preventDefault();
+  runUndo();
+});
+
+// Re-rend les vues susceptibles d'afficher l'état wishlist / à vendre / note, sans toucher
+// aux sections masquées (évite des rendus inutiles sur 2 600 albums).
+function refreshVisibleViews() {
+  const active = SECTIONS.find(s => document.getElementById('sec-' + s)?.classList.contains('active'));
+  const renderers = {
+    albums: renderAlbums, discographie: renderDiscographie, wishlist: renderWishlist,
+    missing: renderMissing, tops: renderTops, forsale: () => setForSaleTab(_forSaleTab),
+    'ok-albums': typeof renderOkAlbums === 'function' ? renderOkAlbums : null,
+  };
+  if (active === 'ratesession') { const a = rsCurrentAlbum(); rsRenderFolderInfo(a); }
+  else if (renderers[active]) renderers[active]();
+  updateNavBadges();
+}
+
+// Annulation d'une note album/morceau : restaure la note ET la file « Notes à reporter »
+// telle qu'elle était (queueNoteToReport peut avoir créé ou modifié une entrée).
+function noteUndoSnapshot(obj) {
+  return { obj, prev: obj.note || 0, ntr: JSON.stringify(notesToReport) };
+}
+function restoreNoteSnapshot(s) {
+  s.obj.note = s.prev;
+  notesToReport = JSON.parse(s.ntr);
+  invalidateCache();
+  saveToStorage();
+}
+
+// ===================== BONS PLANS WISHLIST (v2026.10.24-02) =====================
+// Prix cible par entrée wishlist (w.targetPrice, en €, stocké avec le reste de la wishlist
+// dans meta.wishlist_data — aucune migration) ; une entrée est un « bon plan » 🔥 quand son
+// estimation Discogs (≈ prix le plus bas, approximatif — cf. v2026.07.25-04) passe sous ce
+// seuil. L'estimation reste celle du bouton « 🔄 Estimer prix Discogs » de la Wishlist :
+// rien n'est interrogé automatiquement en arrière-plan.
+function wishIsDeal(w) {
+  return w.targetPrice != null && w.marketplace_price != null && !w.marketplace_no_match
+    && Number(w.marketplace_price) <= Number(w.targetPrice);
+}
+
+function wishDealsCount() { return wishlist.filter(wishIsDeal).length; }
+
+function promptWishTarget(id) {
+  const w = wishlist.find(x => x.id === id);
+  if (!w) return;
+  const raw = prompt(`Prix cible pour « ${w.artist} — ${w.album} » (€, vide = aucun) :`, w.targetPrice != null ? String(w.targetPrice).replace('.', ',') : '');
+  if (raw === null) return;
+  const t = raw.trim().replace(',', '.');
+  if (t === '') delete w.targetPrice;
+  else {
+    const n = parseFloat(t);
+    if (isNaN(n) || n < 0) { toast('Prix invalide', 'warn'); return; }
+    w.targetPrice = Math.round(n * 100) / 100;
+  }
+  saveToStorage();
+  renderWishlist();
+  if (wishIsDeal(w)) toast(`🔥 Bon plan : ${w.album} est déjà sous ton prix cible`);
+}
+
+// ===================== CTRL+K — ACTIONS (v2026.10.24-02) =====================
+// La recherche globale propose aussi des commandes (navigation, sync, estimations, thème…)
+// dont le libellé ou un mot-clé contient la saisie. ↑/↓ pour se déplacer, Entrée pour
+// lancer le résultat sélectionné.
+const GS_COMMANDS = [
+  { icon: '💿', label: 'Aller à : Collection', kw: 'albums collection', run: () => nav('albums') },
+  { icon: '📀', label: 'Aller à : Discographie', kw: 'cd discographie', run: () => nav('discographie') },
+  { icon: '🎯', label: 'Aller à : Wishlist albums', kw: 'wishlist envies', run: () => nav('wishlist') },
+  { icon: '🔥', label: 'Wishlist : bons plans', kw: 'wishlist bons plans deals prix cible', run: () => { nav('wishlist'); const s = document.getElementById('filter-wish-deal'); if (s) { s.value = 'deal'; renderWishlist(); } } },
+  { icon: '💸', label: 'Aller à : Ventes', kw: 'vente vendre vendu annonce', run: () => nav('forsale') },
+  { icon: '💰', label: 'Historique des ventes', kw: 'ventes historique encaissé', run: () => { nav('forsale'); setForSaleTab('history'); } },
+  { icon: '🎼', label: 'Aller à : Tous les morceaux', kw: 'morceaux pistes tracks', run: () => nav('all-tracks') },
+  { icon: '🎯', label: 'Aller à : Wishlist morceaux', kw: 'wishlist morceaux tracks', run: () => nav('track-wishlist') },
+  { icon: '🔍', label: 'Aller à : last.fm albums', kw: 'lastfm last.fm manquants albums', run: () => nav('missing') },
+  { icon: '🎵', label: 'Aller à : last.fm morceaux', kw: 'lastfm last.fm manquants morceaux', run: () => nav('missing-tracks') },
+  { icon: '⭐', label: 'Aller à : RYM', kw: 'rym rateyourmusic', run: () => nav('rym') },
+  { icon: '📈', label: 'Tops : 7 derniers jours', kw: 'tops semaine classement plus écoutés', run: () => openTopsPreset('albums', '7day') },
+  { icon: '📈', label: 'Tops : 30 derniers jours', kw: 'tops mois classement plus écoutés', run: () => openTopsPreset('albums', '1month') },
+  { icon: '📈', label: `Tops : année ${new Date().getFullYear()}`, kw: 'tops année an classement plus écoutés', run: () => openTopsPreset('albums', 'year', new Date().getFullYear()) },
+  { icon: '📈', label: `Tops : année ${new Date().getFullYear() - 1}`, kw: 'tops année an classement plus écoutés', run: () => openTopsPreset('albums', 'year', new Date().getFullYear() - 1) },
+  { icon: '🎤', label: 'Tops artistes : 12 derniers mois', kw: 'tops artistes classement', run: () => openTopsPreset('artists', '12month') },
+  { icon: '🎯', label: 'Session notation', kw: 'notation noter session', run: () => nav('ratesession') },
+  { icon: '📦', label: 'Session notation : Stock uniquement', kw: 'notation noter session stock', run: () => { rsFilters = { ...rsFilters, folder: 'stock' }; try { localStorage.setItem(RS_FILTERS_LS_KEY, JSON.stringify(rsFilters)); } catch (e) {} ratingSessionMode = 'albums'; nav('ratesession'); } },
+  { icon: '🎤', label: 'Aller à : Vue Artiste', kw: 'artiste discographie musicbrainz', run: () => nav('artistview') },
+  { icon: '💰', label: 'Aller à : Valeur collection', kw: 'valeur prix discogs estimation', run: () => nav('marketvalue') },
+  { icon: '📤', label: 'Aller à : Prêts en cours', kw: 'prêts prêté', run: () => nav('loans') },
+  { icon: '📋', label: 'Aller à : Notes à reporter', kw: 'notes reporter musicbee rym', run: () => nav('notestoreport') },
+  { icon: '📊', label: 'Aller à : Insights', kw: 'insights stats statistiques', run: () => nav('insights') },
+  { icon: '📥', label: 'Aller à : Import / Export', kw: 'import export sauvegarde', run: () => nav('import') },
+  { icon: '🔄', label: 'Synchroniser last.fm', kw: 'sync lastfm last.fm scrobbles', run: () => { nav('import'); connectLastfm(); } },
+  { icon: '🏷️', label: 'Estimer les prix Discogs de la wishlist', kw: 'prix estimation discogs wishlist', run: () => { nav('wishlist'); fetchWishlistMarketplaceEstimates(); } },
+  { icon: '💾', label: 'Exporter la sauvegarde JSON', kw: 'export sauvegarde backup json', run: () => exportJSON() },
+  { icon: '🌓', label: 'Basculer thème clair / sombre', kw: 'thème clair sombre dark light mode', run: () => toggleTheme() },
+];
+
+function _gsNorm(s) { return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+
+function gsMatchCommands(q) {
+  const nq = _gsNorm(q);
+  const words = nq.split(/\s+/).filter(Boolean);
+  return GS_COMMANDS
+    .map((c, i) => ({ c, i, hay: _gsNorm(c.label + ' ' + c.kw) }))
+    .filter(x => words.every(w => x.hay.includes(w)))
+    .sort((a, b) => (_gsNorm(a.c.label).includes(nq) ? 0 : 1) - (_gsNorm(b.c.label).includes(nq) ? 0 : 1))
+    .slice(0, 6);
+}
+
+function runGsCommand(i) {
+  closeGlobalSearchModal();
+  const c = GS_COMMANDS[i];
+  if (c) setTimeout(() => c.run(), 0);
+}
+
+function openTopsPreset(type, period, year) {
+  nav('tops');
+  const ps = document.getElementById('tops-period');
+  if (ps) ps.value = period;
+  if (year) { const ys = document.getElementById('tops-cal-year'); if (ys) ys.value = String(year); }
+  _topsType = type;
+  ['albums', 'artists', 'tracks'].forEach(k => document.getElementById('tops-type-btn-' + k)?.classList.toggle('active', k === type));
+  onTopsPeriodChange();
+}
+
+// Navigation clavier dans les résultats (↑/↓/Entrée)
+let _gsActiveIdx = 0;
+function gsHighlight(idx) {
+  const rows = [...document.querySelectorAll('#gs-results .gs-row')];
+  if (!rows.length) return;
+  _gsActiveIdx = Math.max(0, Math.min(rows.length - 1, idx));
+  rows.forEach((r, i) => { r.style.background = i === _gsActiveIdx ? 'var(--bg3)' : 'transparent'; });
+  rows[_gsActiveIdx].scrollIntoView?.({ block: 'nearest' });
+}
+(function () {
+  const inp = document.getElementById('gs-input');
+  if (!inp) return;
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); gsHighlight(_gsActiveIdx + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); gsHighlight(_gsActiveIdx - 1); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      _gsRun(); // résultats à jour même si le debounce n'a pas encore tourné
+      const rows = document.querySelectorAll('#gs-results .gs-row');
+      (rows[_gsActiveIdx] || rows[0])?.click();
+    }
+  });
+})();
+
+// ===================== THÈME CLAIR (v2026.10.24-02) =====================
+// Variables CSS redéfinies dans theme.css sous :root[data-theme="light"]. Le thème est posé
+// avant le premier rendu par un petit script en tête de index.html (pas de flash sombre) :
+// choix mémorisé (localStorage terant_theme) sinon préférence système.
+function currentTheme() { return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const b = document.getElementById('theme-toggle');
+  if (b) { b.textContent = t === 'light' ? '🌙' : '☀️'; b.title = t === 'light' ? 'Passer en thème sombre' : 'Passer en thème clair'; }
+}
+function toggleTheme() {
+  const t = currentTheme() === 'light' ? 'dark' : 'light';
+  try { localStorage.setItem('terant_theme', t); } catch (e) {}
+  applyTheme(t);
+}
+applyTheme(currentTheme());
+
+// ===================== VUE MOSAÏQUE (v2026.10.24-02) =====================
+// Collection et Discographie : bascule tableau ↔ mosaïque de pochettes. Mêmes filtres, tri et
+// pagination (la mosaïque affiche exactement la page courante du tableau). Choix mémorisé par
+// vue en localStorage.
+const VIEW_MODE_LS_KEY = 'terant_view_mode_v1';
+let _viewMode = { collection: 'table', discographie: 'table' };
+try { _viewMode = { ..._viewMode, ...(JSON.parse(localStorage.getItem(VIEW_MODE_LS_KEY) || '{}')) }; } catch (e) {}
+
+function toggleViewMode(view) {
+  _viewMode[view] = _viewMode[view] === 'grid' ? 'table' : 'grid';
+  try { localStorage.setItem(VIEW_MODE_LS_KEY, JSON.stringify(_viewMode)); } catch (e) {}
+  if (view === 'collection') renderAlbums(); else renderDiscographie();
+}
+
+function mosaicCard(a) {
+  const f = a.folders || [];
+  const icons = [
+    (a.cd || a.has_cd) ? '💿' : '',
+    (f.includes('stock') || a.primaryFolder === 'stock') ? '📦' : '',
+    a.okFolder ? '✅' : '',
+    a.forSale ? '💸' : '',
+  ].filter(Boolean).join(' ');
+  const isStock = f.includes('stock') || a.primaryFolder === 'stock';
+  const open = isStock ? `openStockModal('${sid(a.id)}')` : `editAlbum('${sid(a.id)}')`;
+  const meta = [a.year, a.genre].filter(Boolean).join(' · ');
+  const stats = [
+    a.note ? `<span style="color:var(--accent)">${a.note.toFixed(1)}★</span>` : '',
+    a.plays ? `<span>${a.plays} ▶</span>` : '',
+  ].filter(Boolean).join(' · ');
+  return `<div class="cover-card" onclick="${open}">
+    ${icons ? `<span class="cover-flag" style="left:auto;right:6px;background:rgba(0,0,0,0.55)">${icons}</span>` : ''}
+    <div class="cover-thumb">${albumAvatar(a)}</div>
+    <div class="name" title="${escAttr(a.album)}">${esc(a.album)}</div>
+    <div class="sub" title="${escAttr(a.artist)}">${esc(a.artist)}</div>
+    ${meta ? `<div class="sub" style="opacity:0.75">${esc(meta)}</div>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:4px">
+      <span style="font-family:var(--mono);font-size:11px;color:var(--text3)">${stats}</span>
+      <span style="display:flex;gap:3px" onclick="event.stopPropagation()">
+        <button class="btn btn-xs" onclick="openYouTubeMusicForAlbumId('${sid(a.id)}')" title="Écouter sur YouTube Music">▶️</button>
+        ${searchMenuBtn(a.artist, a.album).replace('btn btn-sm', 'btn btn-xs')}
+      </span>
+    </div>
+  </div>`;
+}
+
+function renderMosaic(view, slice) {
+  const gridId = view === 'collection' ? 'album-grid' : 'disco-grid';
+  const tbodyId = view === 'collection' ? 'album-tbody' : 'disco-tbody';
+  const btnId = view === 'collection' ? 'view-toggle-col' : 'view-toggle-disco';
+  const on = _viewMode[view] === 'grid';
+  const wrap = document.getElementById(tbodyId)?.closest('.table-wrap');
+  if (wrap) wrap.style.display = on ? 'none' : '';
+  const btn = document.getElementById(btnId);
+  if (btn) { btn.textContent = on ? '☰' : '▦'; btn.title = on ? 'Revenir au tableau' : 'Vue mosaïque de pochettes'; }
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+  grid.style.display = on ? 'grid' : 'none';
+  if (!on) return;
+  grid.innerHTML = slice.length
+    ? slice.map(mosaicCard).join('')
+    : '<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📀</div>Aucun album</div>';
 }
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
