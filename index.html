@@ -99,6 +99,7 @@
 <!-- APP_VERSION: v2026.07.25-03 — Valeur estimée Discogs dans Discographie + Vendre, détection des liens Discogs cassés. Demandé par Antoine : "je voudrais que la discographie fasse apparaître la valeur estimée discogs, notamment les articles dans la liste vente, je veux identifier les articles sans estimation pour vérifier que le lien discogs n'est pas erroné". Nouvelle colonne "Valeur DC" (discogsValueCell(), partagée) dans Discographie ET l'onglet Vendre (qui n'affichait jusqu'ici aucune donnée de valorisation) : montant si a.marketplace_price connu, badge cliquable "⚠️ Sans estimation" si discogsId présent mais jamais estimé (déclenche fetchSingleMarketplaceEstimate() — un fetch immédiat pour cet album précis, feedback direct en cas d'échec avec l'ID en cause, permet de confirmer tout de suite si le discogsId est cassé sans attendre le prochain passage du batch général), "–" neutre si pas de discogsId du tout. 2 nouveaux filtres dans le sélecteur Discographie : "💸 À vendre" (les articles forSale étaient jusqu'ici entièrement exclus de la vue Discographie — invisibles, donc leur valeur ne s'y voyait jamais) et "⚠️ Sans estimation Discogs" (tout CD avec discogsId et sans marketplace_price, à vendre ou non, pour l'audit demandé). Export CSV (Discographie + Vendre) mis à jour avec la colonne Valeur DC en conséquence. -->
 <!-- APP_VERSION: v2026.07.25-04 — Prix Discogs dans l'export offline, estimation en masse pour Ok + Wishlist. Demandé par Antoine : "est-ce qu'on pourrait inclure les prix dans l'export html, aller chercher les prix mini haut médian discogs pour tous les albums dans OK et wishlist". Clarifié avec Antoine au préalable : l'API Discogs officielle documentée n'expose que le prix le plus bas (/marketplace/stats, lowest_price/num_for_sale) — le "Low/Median/High" des pages Discogs.com vient de l'historique des ventes, une fonctionnalité web only non exposée par l'API (confirmé par le staff Discogs sur leur propre forum) ; décision d'Antoine : rester sur le prix le plus bas officiel plutôt que l'endpoint non documenté /marketplace/search. Nouveau : fetchOkMarketplaceStats() (bouton dédié dans l'onglet Ok, même fonction/cadence que le batch général de Valeur collection mais scopé aux CD du dossier Ok) et fetchWishlistMarketplaceEstimates() (bouton dédié Wishlist, décision d'Antoine : recherche automatique par artiste/album via searchDiscogs() — même branche Edge Function "discogs_search" que "IDs manquants" — puis fetchMarketplaceStats() sur le 1er résultat ; approximatif, pressage non garanti, marqué marketplace_price_approx et affiché avec un préfixe "≈" partout où le prix apparaît, wishlistValueCell() dédiée en plus de discogsValueCell()). Colonne "Valeur DC" ajoutée aux onglets Ok et Wishlist (+ export CSV des deux). Export offline Android : nouveaux champs price/priceCurrency/priceApprox sur les entrées owned et wishlist (pas sur discover, qui n'a pas de discogsId), nouveau badge "💰" (préfixé "≈" si approximatif) et tri "Tri : Prix". -->
 <!-- APP_VERSION: v2026.07.25-06 — "last.fm albums" : filtre RYM opérateur+valeur, sélection multiple + actions en masse. Demandé par Antoine, après clarification (il pensait initialement à un champ de note qui n'a jamais existé sur cet onglet — en réalité il voulait le même sélecteur de filtre RYM qu'en Collection, opérateur logique + valeur, plutôt qu'une liste de seuils fixes, PLUS la sélection multiple déjà présente sur "last.fm morceaux" mais absente ici). (1) filter-missing-rym (select à seuils fixes : "RYM ≥ 4.0", "RYM ≤ 2.5"...) remplacé par la paire filter-missing-rym-op/filter-missing-rym-val — même widget exact que Collection (onNoteOpChange()/matchNoteFilter(), zéro nouvelle logique de filtrage à écrire), permet n'importe quel opérateur (≥/>/=/≤/∅/✓) avec n'importe quelle valeur au lieu des 5 seuils pré-définis. (2) Sélection multiple ajoutée sur les cartes (jusqu'ici uniquement sur le tableau "last.fm morceaux", v2026.07.12-11) : case à cocher par carte + "Sélectionner tout (page courante)" + barre d'actions (🚫 Ignorer, 👂 À écouter, 🎯 Wishlist, Annuler la sélection), même sémantique toggle que les boutons individuels existants. selectedMissingKeys (clé = normalizeKey(artiste,album), même raisonnement que selectedMissingTrackKeys : computeMissing() n'a pas d'id stable, une clé texte survit à un changement de filtre/tri). 🔗 Associer et ▶️ YouTube restent individuels (non batchables), comme sur "last.fm morceaux". -->
+<!-- APP_VERSION: v2026.10.24-01 — 4 ajouts demandés par Antoine. (1) Liens de recherche directs Discogs/RYM/Bandcamp/MusicBrainz préremplis artiste+titre : menu 🔎 sur les lignes Collection, Discographie, Wishlist, Ventes, last.fm albums/morceaux et Tops ; liens inline dans la Session notation et la fiche album (searchLinksHtml/searchMenuBtn/openSearchMenu). (2) Session notation filtrable (mode Albums) : dossier, genre, artiste, écoutes min, « avec note RYM » — appliqués à buildRatingQueue() et au rendu, mémorisés en localStorage (terant_rs_filters_v1). (3) Suivi des ventes : nouvelle entrée de nav « 💸 Ventes » (section forsale, jusqu'ici inaccessible depuis le menu) avec onglets À vendre / Historique ; « 💰 Vendu » ouvre une modale prix/date/canal/note, écrit dans salesLog (meta.sales_log_data, inclus dans l'export/réimport JSON) puis retire le flag à vendre ; 📝 copie un texte d'annonce ; résumé total encaissé / écart vs estimation Discogs / valeur restante ; export CSV. (4) Nouvelle vue « 📈 Tops » : albums/artistes/morceaux les plus écoutés sur 7 j / 30 j / 3-6-12 mois / tout (user.gettop*) ou un mois / une année civile précis (user.getweekly*chart sur la plage, repli automatique en somme des semaines si last.fm ne renvoie rien) ; croisés avec la collection (possédé, CD, wishlist, note perso/RYM) ; filtres genre, année de parution (année d'origine de l'album possédé, sinon RYM), possession, recherche, limite d'affichage ; rang last.fm d'origine conservé sous filtre ; 🎯 ajout wishlist ; export CSV. sw.js CACHE_VERSION aligné. Aucune migration. -->
 <!-- APP_VERSION: v2026.10.23-01 — Session notation (mode Albums) : (1) indication du dossier de l'album courant (Discographie / Stock / Ok / À vendre / Album, + badge Wishlist s'il y figure) sous la ligne année·genre ; (2) boutons d'action contextuels à côté de ▶️ — 💸 « À vendre » (toggle, réutilise markForSale/unmarkForSale) si l'album est en Discographie, 🎯 « Wishlist » (toggle ajout/retrait) si l'album est en Stock ou Ok, même règle que la Collection ; (3) bouton 📋 copier à côté du titre et de l'artiste (albums et morceaux isolés) pour coller directement dans une recherche Discogs/RYM/etc. — navigator.clipboard avec repli execCommand si indisponible. -->
 <!-- APP_VERSION: v2026.07.25-07 — Correction bug "impossible de retirer un album de la vente" signalé par Antoine : dans Discographie, sous-filtre "💸 À vendre" (v2026.07.25-03), le bouton 💸 sur chaque ligne appelait toujours markForSale() même pour un album déjà marqué à vendre (titre "Déjà à vendre" affiché mais clic sans effet, car forSale était déjà true) — aucun moyen de faire marche arrière depuis cette vue. Le bouton bascule désormais entre markForSale()/unmarkForSale() selon a.forSale, comme c'était déjà le cas dans l'onglet Vendre dédié. unmarkForSale() appelle en plus renderDiscographie() (comme markForSale() le fait déjà) pour que la ligne disparaisse immédiatement de la vue "à vendre" une fois retirée, au lieu d'attendre un changement d'onglet. -->
 <!-- APP_VERSION: v2026.07.25-05 — Estimation Discogs automatique après import CSV Discogs. Demandé par Antoine ("est-ce que l'import discogs pourrait provoquer une mise à jour des prix ?"), clarifié au préalable : incrémental uniquement (les CD nouvellement importés sans prix), jamais de rafraîchissement des prix déjà connus. importDiscogs() chaîne désormais fetchAllMarketplaceStats() après le fetch des tracklists existant (setTimeout 1500ms), l'un après l'autre plutôt qu'en parallèle pour ne pas faire cohabiter deux boucles pacées à 700ms sur la même API Discogs en même temps. fetchAllMarketplaceStats() ciblait déjà uniquement a.marketplace_price == null (aucun changement de logique nécessaire côté ciblage) — juste le nouveau point d'appel automatique. -->
@@ -159,11 +160,14 @@
   </div>
   <!-- badges conservés pour updateNavBadges() -->
   <span id="nav-ok-count" style="display:none"></span>
-  <span id="nav-forsale-count" style="display:none"></span>
   <span id="nav-stock-count" style="display:none"></span>
   <div class="nav-item" onclick="nav('wishlist')">
     <span class="nav-icon">🎯</span> Wishlist albums
     <span class="nav-badge" id="nav-wish-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('forsale')">
+    <span class="nav-icon">💸</span> Ventes
+    <span class="nav-badge" id="nav-forsale-count">0</span>
   </div>
 
   <div class="nav-section">Morceaux</div>
@@ -190,6 +194,9 @@
   <div class="nav-item" onclick="nav('rym')">
     <span class="nav-icon">⭐</span> RYM
     <span class="nav-badge warn" id="nav-rym-count">0</span>
+  </div>
+  <div class="nav-item" onclick="nav('tops')">
+    <span class="nav-icon">📈</span> Tops
   </div>
   <div class="nav-item" onclick="nav('ratesession')">
     <span class="nav-icon">🎯</span> Session notation
@@ -240,7 +247,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.10.23-01</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.10.24-01</span>
     <div class="spacer"></div>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
@@ -1015,7 +1022,13 @@
 
     <!-- ==================== FORSALE ==================== -->
     <div class="section" id="sec-forsale">
-      <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums marqués à vendre. Cliquez sur ✓ pour retirer de la liste.</p>
+      <div class="covers-toolbar" style="margin-bottom:14px">
+        <button class="covers-filter-btn active" id="forsale-tab-btn-list" onclick="setForSaleTab('list')">💸 À vendre</button>
+        <button class="covers-filter-btn" id="forsale-tab-btn-history" onclick="setForSaleTab('history')">💰 Historique des ventes</button>
+      </div>
+      <div id="sales-summary" class="stats-row" style="margin-bottom:18px"></div>
+      <div id="forsale-pane-list">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Albums marqués à vendre. « 💰 Vendu » enregistre le prix et la date dans l'historique, 📝 copie un texte d'annonce, ✕ retire simplement de la vente.</p>
       <div class="toolbar" style="margin-bottom:12px">
         <input id="filter-forsale-artist" type="text" placeholder="Artiste…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px"/>
         <input id="filter-forsale-year" type="text" placeholder="Année…" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:74px" maxlength="4">
@@ -1028,6 +1041,62 @@
         <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th>Valeur DC</th><th style="width:80px"></th></tr></thead>
         <tbody id="forsale-tbody"></tbody>
       </table></div>
+      </div><!-- /forsale-pane-list -->
+      <div id="forsale-pane-history" style="display:none">
+        <div class="toolbar" style="margin-bottom:12px">
+          <input id="sales-filter-q" type="text" placeholder="Artiste / album…" oninput="renderSalesHistory()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:170px">
+          <select id="sales-filter-year" onchange="renderSalesHistory()"><option value="">Toutes années</option></select>
+          <select id="sales-filter-channel" onchange="renderSalesHistory()"><option value="">Tous canaux</option></select>
+          <div class="toolbar-right">
+            <span id="sales-counter" style="font-size:12px;color:var(--text3);font-family:var(--mono)"></span>
+            <button class="btn btn-sm" onclick="exportSalesCSV()">↓ CSV</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Artiste / Album</th><th>Vendu le</th><th>Canal</th><th>Prix</th><th>Estim. DC</th><th>Écart</th><th style="width:70px"></th></tr></thead>
+          <tbody id="sales-tbody"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ==================== TOPS (v2026.10.24-01) ==================== -->
+    <div class="section" id="sec-tops">
+      <div class="covers-toolbar" style="margin-bottom:12px">
+        <button class="covers-filter-btn active" id="tops-type-btn-albums" onclick="setTopsType('albums')">💿 Albums</button>
+        <button class="covers-filter-btn" id="tops-type-btn-artists" onclick="setTopsType('artists')">🎤 Artistes</button>
+        <button class="covers-filter-btn" id="tops-type-btn-tracks" onclick="setTopsType('tracks')">🎵 Morceaux</button>
+        <span style="width:12px"></span>
+        <select id="tops-period" onchange="onTopsPeriodChange()"></select>
+        <select id="tops-cal-month" onchange="loadTops()" style="display:none"></select>
+        <select id="tops-cal-year" onchange="loadTops()" style="display:none"></select>
+        <button class="btn btn-sm" onclick="loadTops(true)" title="Recharger depuis last.fm">🔄</button>
+      </div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <input id="tops-filter-q" type="text" placeholder="Artiste / titre…" oninput="renderTops()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px">
+        <select id="tops-filter-genre" onchange="renderTops()"><option value="">Tous genres</option></select>
+        <span id="tops-year-filters" style="display:inline-flex;gap:4px;align-items:center" title="Année de parution (année d'origine de l'album possédé, sinon RYM) — sans effet sur les artistes">
+          <span style="font-size:11px;color:var(--text3)">Parution</span>
+          <input id="tops-filter-ymin" type="text" inputmode="numeric" maxlength="4" placeholder="de" oninput="renderTops()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:58px">
+          <input id="tops-filter-ymax" type="text" inputmode="numeric" maxlength="4" placeholder="à" oninput="renderTops()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:58px">
+        </span>
+        <select id="tops-filter-owned" onchange="renderTops()">
+          <option value="">Possédés ou non</option>
+          <option value="owned">✅ Possédés</option>
+          <option value="missing">⬜ Non possédés</option>
+          <option value="wish">🎯 En wishlist</option>
+        </select>
+        <select id="tops-limit" onchange="renderTops()">
+          <option value="25">Top 25</option>
+          <option value="50" selected>Top 50</option>
+          <option value="100">Top 100</option>
+          <option value="250">Top 250</option>
+          <option value="500">Top 500</option>
+        </select>
+        <button class="btn btn-sm" onclick="resetTopsFilters()" title="Réinitialiser les filtres">↺</button>
+        <div class="toolbar-right"><button class="btn btn-sm" onclick="exportTopsCSV()">↓ CSV</button></div>
+      </div>
+      <div id="tops-status" style="font-size:12px;color:var(--text3);font-family:var(--mono);margin-bottom:10px"></div>
+      <div id="tops-list" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
 
     <!-- ==================== ALL TRACKS ==================== -->
@@ -1562,6 +1631,22 @@
         <button class="covers-filter-btn" id="rs-mode-btn-tracks" onclick="setRatingSessionMode('tracks')">🎧 Morceaux isolés</button>
         <button class="covers-filter-btn" id="rs-mode-btn-scrobbles" onclick="setRatingSessionMode('scrobbles')">🕐 Scrobbles récents</button>
       </div>
+      <!-- Filtres de la file albums (v2026.10.24-01) — mémorisés en localStorage -->
+      <div id="rs-filters" class="toolbar" style="justify-content:center;margin-bottom:16px;display:none">
+        <select id="rs-filter-folder" onchange="onRsFiltersChange()" title="Dossier">
+          <option value="">Tous dossiers</option>
+          <option value="discographie">🎵 Discographie</option>
+          <option value="stock">📦 Stock</option>
+          <option value="ok">✅ Ok</option>
+          <option value="forsale">💸 À vendre</option>
+          <option value="cd">💿 CD uniquement</option>
+        </select>
+        <select id="rs-filter-genre" onchange="onRsFiltersChange()" title="Genre"><option value="">Tous genres</option></select>
+        <input id="rs-filter-artist" type="text" placeholder="Artiste…" oninput="onRsFiltersChangeDebounced()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:130px">
+        <input id="rs-filter-minplays" type="text" inputmode="numeric" placeholder="Écoutes ≥" oninput="onRsFiltersChangeDebounced()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:90px">
+        <label class="form-check" style="font-size:12px;color:var(--text2)"><input type="checkbox" id="rs-filter-rym" onchange="onRsFiltersChange()"> Avec note RYM</label>
+        <button class="btn btn-sm" onclick="resetRsFilters()" title="Réinitialiser les filtres">↺</button>
+      </div>
       <div class="rate-session-progress-wrap" id="rs-progress-wrap">
         <div class="rate-session-progress-bar"><div class="rate-session-progress-fill" id="rs-progress-fill" style="width:0%"></div></div>
         <div id="rs-progress-label" style="font-size:12px;color:var(--text3);margin-top:6px">0 / 0 albums notés</div>
@@ -1584,6 +1669,7 @@
               <button class="btn" id="rs-listen-btn" onclick="rsListenCurrent()">▶️ Écouter sur YouTube Music</button>
               <span id="rs-folder-actions" style="display:inline-flex;gap:6px;margin-left:6px;flex-wrap:wrap"></span>
             </div>
+            <div id="rs-search-links" style="margin:-8px 0 16px"></div>
             <div class="rate-session-stars" id="rs-stars"></div>
             <div class="rs-numeric-rate">
               <input type="text" id="rs-note-input" inputmode="decimal" placeholder="0 à 5" title="Note (0 à 5, demi-étoiles possibles)">
@@ -1865,6 +1951,26 @@
 </div><!-- /app -->
 
 <!-- MODAL ALBUM -->
+<!-- Modale d'enregistrement d'une vente (v2026.10.24-01) -->
+<div class="modal-overlay" id="modal-sale" onclick="if(event.target===this)closeSaleModal()">
+  <div class="modal" style="width:420px">
+    <h2>💰 Enregistrer la vente</h2>
+    <div id="sale-album-label" style="font-size:14px;font-weight:500;margin-bottom:4px"></div>
+    <div id="sale-estimate" style="font-size:12px;color:var(--text3);margin-bottom:16px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-row"><label>Prix de vente (€)</label><input type="text" id="sale-price" inputmode="decimal" placeholder="ex. 12,50" onkeydown="if(event.key==='Enter')confirmSale()"></div>
+      <div class="form-row"><label>Date</label><input type="date" id="sale-date"></div>
+      <div class="form-row" style="grid-column:1/-1"><label>Canal</label><select id="sale-channel"></select></div>
+      <div class="form-row" style="grid-column:1/-1"><label>Note (acheteur, état…)</label><input type="text" id="sale-notes" placeholder="facultatif"></div>
+    </div>
+    <div style="font-size:11px;color:var(--text3)">L'album sort de la liste « à vendre ». Pense à le retirer de ta collection Discogs : la fiche disparaîtra de l'app au prochain import, la vente reste dans l'historique.</div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeSaleModal()">Annuler</button>
+      <button class="btn btn-accent" onclick="confirmSale()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-album">
   <div class="modal">
     <h2 id="modal-album-title">Ajouter un album</h2>
@@ -1877,6 +1983,7 @@
       <div class="form-row" style="grid-column:1/-1">
         <label>Album</label>
         <input type="text" id="f-album" placeholder="ex. Kind of Blue">
+        <div id="modal-search-links" style="margin-top:6px"></div>
       </div>
       <div class="form-row">
         <label>Année</label>

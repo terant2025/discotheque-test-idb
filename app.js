@@ -58,6 +58,9 @@ let _genreEvolutionComputedAt = null;
 // fetchAllMarketplaceStats) — capturé automatiquement à chaque visite de l'onglet Valeur
 // collection, un seul point par mois (écrase le point du mois en cours s'il existe déjà).
 let marketValueHistory = []; // [{ month:'YYYY-MM', total, count, currency }]
+// Journal des ventes (v2026.10.24-01) — persisté dans meta.sales_log_data, indépendant de la
+// fiche album (qui disparaîtra au réimport Discogs une fois le CD retiré de la collection).
+let salesLog = []; // [{ id, albumId, artist, album, year, label, catno, discogsId, price, currency, soldAt:'YYYY-MM-DD', channel, estimate, estimateCurrency, notes }]
 let modalNote = 0;
 let trackNote = 0;
 let currentPage = 1;
@@ -269,6 +272,7 @@ function loadFromStorage() {
     genreEvolution = data.genreEvolution || [];
     _genreEvolutionComputedAt = data.genreEvolutionComputedAt || null;
     marketValueHistory = data.marketValueHistory || [];
+    salesLog = data.salesLog || [];
     nextId = Math.max(nextId, data.nextId || 0, computeNextId());
     if (repairDuplicateIds()) saveToStorage();
     setSaveIndicator('saved', data.savedAt);
@@ -1064,6 +1068,7 @@ async function saveToSupabase(opts) {
       { key: 'listening_heatmap_data', value: JSON.stringify({ data: listeningHeatmap, computedAt: _listeningHeatmapComputedAt }) },
       { key: 'genre_evolution_data', value: JSON.stringify({ data: genreEvolution, computedAt: _genreEvolutionComputedAt }) },
       { key: 'market_value_history_data', value: JSON.stringify(marketValueHistory) },
+      { key: 'sales_log_data', value: JSON.stringify(salesLog) },
     ], { onConflict: 'key' });
 
     // ── Bump atomique du compteur de version (v2026.07.09) ────────────────────
@@ -1158,6 +1163,7 @@ async function loadFromSupabase() {
         if (metaMap.listening_heatmap_data) { try { const lh = JSON.parse(metaMap.listening_heatmap_data); listeningHeatmap = lh.data || []; _listeningHeatmapComputedAt = lh.computedAt || null; } catch(e) {} }
         if (metaMap.genre_evolution_data) { try { const ge = JSON.parse(metaMap.genre_evolution_data); genreEvolution = ge.data || []; _genreEvolutionComputedAt = ge.computedAt || null; } catch(e) {} }
         if (metaMap.market_value_history_data) { try { marketValueHistory = JSON.parse(metaMap.market_value_history_data) || []; } catch(e) {} }
+        if (metaMap.sales_log_data) { try { salesLog = JSON.parse(metaMap.sales_log_data) || []; } catch(e) {} }
         if (metaMap.lastfm_status) { try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_track_status) { try { _lastfmTrackStatus = JSON.parse(metaMap.lastfm_track_status) || {}; } catch(e) {} }
         if (metaMap.lastfm_loved) { try { _lovedTracks = new Set(JSON.parse(metaMap.lastfm_loved)); } catch(e) {} }
@@ -1348,6 +1354,9 @@ async function loadFromSupabase() {
       }
       if (metaMap.market_value_history_data) {
         try { marketValueHistory = JSON.parse(metaMap.market_value_history_data) || []; } catch(e) {}
+      }
+      if (metaMap.sales_log_data) {
+        try { salesLog = JSON.parse(metaMap.sales_log_data) || []; } catch(e) {}
       }
       if (metaMap.lastfm_status) {
         try { _lastfmStatus = JSON.parse(metaMap.lastfm_status) || {}; } catch(e) {}
@@ -1792,7 +1801,7 @@ function albumAvatar(album) {
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
   'missing', 'missing-tracks', 'rym', 'ratesession', 'artistview', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'insights', 'import',
-  'ok-albums', 'forsale', 'stock'];
+  'ok-albums', 'forsale', 'stock', 'tops'];
 function nav(id) {
   SECTIONS.forEach(s => {
     document.getElementById('sec-' + s).classList.toggle('active', s === id);
@@ -1807,7 +1816,7 @@ function nav(id) {
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic',
-    ratesession: 'Session notation', artistview: 'Vue Artiste', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', insights: 'Insights', import: 'Import / Export'
+    ratesession: 'Session notation', tops: 'Tops', forsale: 'Ventes', artistview: 'Vue Artiste', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1817,6 +1826,8 @@ function nav(id) {
     missing: 'Albums écoutés absents de la collection', 'missing-tracks': 'Morceaux écoutés absents',
     rym: 'Croisement collection & ratings',
     ratesession: 'Un album ou morceau non noté à la fois, ordre aléatoire (albums possédés jamais écoutés inclus)',
+    tops: 'Les plus écoutés sur une période (last.fm), croisés avec ta collection',
+    forsale: 'Albums à vendre et journal des ventes',
     artistview: 'Discographie MusicBrainz complète — possédés et manquants, notes et écoutes rapatriées',
     artistlinks: 'Crédits MusicBrainz croisés avec ta collection',
     marketvalue: 'Estimation via le marketplace Discogs — indicatif, pas une cote officielle',
@@ -1839,6 +1850,8 @@ function nav(id) {
   if (id === 'album-tracks')  renderAlbumTracks();
   if (id === 'track-wishlist') renderTrackWishlist();
   if (id === 'ratesession') initRatingSession();
+  if (id === 'tops') initTopsView();
+  if (id === 'forsale') setForSaleTab(_forSaleTab);
   if (id === 'import') { renderAssocReview(); renderMissingIds(); updateNavBadges(); }
   if (id === 'artistview') renderArtistView();
   if (id === 'artistlinks') renderArtistLinks();
@@ -2581,7 +2594,7 @@ function renderAlbums() {
     if (ff === 'ok' && isOk) {
       actionBtn = `<button class="btn btn-sm" onclick="markOkDone('${sid(a.id)}');event.stopPropagation()" title="Retirer de Ok">✕ Ok</button>`;
     } else if (ff === 'forsale' && isForSale) {
-      actionBtn = `<button class="btn btn-sm" onclick="unmarkForSale('${sid(a.id)}');event.stopPropagation()" title="Vendu">✓</button>`;
+      actionBtn = `<button class="btn btn-sm" onclick="openSaleModal('${sid(a.id)}');event.stopPropagation()" title="Enregistrer la vente">💰</button><button class="btn btn-sm" onclick="unmarkForSale('${sid(a.id)}');event.stopPropagation()" title="Retirer de la vente">✕</button>`;
     }
 
     // Wishlist — uniquement pour les albums en stock ou dans Ok/
@@ -2621,7 +2634,7 @@ function renderAlbums() {
           <span class="plays-num">${a.plays||0}</span>
         </div>
       </td>
-      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">${wishBtn}${ytBtn}${mergeBtn}${actionBtn}</td>
+      <td onclick="event.stopPropagation()" style="display:flex;gap:4px">${wishBtn}${ytBtn}${searchMenuBtn(a.artist, a.album)}${mergeBtn}${actionBtn}</td>
     </tr>`;
   }).join('');
 
@@ -3242,6 +3255,7 @@ function renderMissing() {
           <button class="btn btn-sm ${st==='to_listen'?'btn-accent':''}" data-idx="${idx}" data-action="to_listen" title="À écouter">👂</button>
           <button class="btn btn-sm ${st==='wishlist'?'btn-accent':''}" data-idx="${idx}" data-action="wishlist" title="Wishlist">🎯</button>
           <button class="btn btn-sm" data-idx="${idx}" data-action="youtube" title="Chercher sur YouTube Music">▶️</button>
+          ${searchMenuBtn(m.artist, m.album)}
         </div>`;
       frag.appendChild(div);
     }
@@ -3605,6 +3619,7 @@ function renderMissingTracks() {
       <button class="btn btn-sm ${isWishlist?'btn-accent':''}" onclick="setMissingTrackStatus(${i},'wishlist')" title="${isWishlist?'Retirer de la wishlist':'Wishlist'}">🎯</button>
       <button class="btn btn-sm btn-accent" onclick="addTrackFromMissingIdx(${i})" title="Ajouter aux morceaux isolés">＋</button>
       <button class="btn btn-sm" onclick="openYouTubeMusicSearch(unsid('${sid(d.artist)}'), unsid('${sid(d.track)}'))" title="Chercher sur YouTube Music">▶️</button>
+      ${searchMenuBtn(d.artist, d.track, 'track')}
     </td>
   </tr>`;
   }).join('') + (list.length > 200 ? `<tr><td colspan="6" style="text-align:center;color:var(--text3);font-size:12px;padding:12px">… et ${(list.length-200).toLocaleString('fr-FR')} autres — affinez les filtres</td></tr>` : '');
@@ -3960,6 +3975,7 @@ function editAlbum(id) {
   else if (coverWrap) coverWrap.style.display = 'none';
   updateDiscogsLink();
   setModalNote(a.note || 0);
+  { const sl = document.getElementById('modal-search-links'); if (sl) sl.innerHTML = searchLinksHtml(a.artist, a.album, 'album'); }
   renderAlbumTracklistPanel(realId);
   renderMatchConfidencePanel(realId);
   renderProvenancePanel(realId);
@@ -8138,6 +8154,7 @@ function renderForSale() {
   const badge = document.getElementById('nav-forsale-count');
   if (badge) badge.textContent = list.length;
   const tbody = document.getElementById('forsale-tbody');
+  renderSalesSummary();
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
    const noteCell = a => a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`;
@@ -8147,7 +8164,12 @@ function renderForSale() {
     <td><div class="badges-cell">${fmtBadge(a)}</div></td>
     <td>${noteCell(a)}</td>
     <td>${discogsValueCell(a)}</td>
-    <td><button class="btn btn-sm" onclick="unmarkForSale('${sid(a.id)}')" title="Retirer">✓</button></td>
+    <td style="display:flex;gap:4px;align-items:center">
+      <button class="btn btn-sm btn-accent" onclick="openSaleModal('${sid(a.id)}')" title="Enregistrer la vente (prix, date, canal)">💰 Vendu</button>
+      <button class="btn btn-sm" onclick="copyListingText('${sid(a.id)}')" title="Copier un texte d'annonce prêt à coller">📝</button>
+      ${searchMenuBtn(a.artist, a.album)}
+      <button class="btn btn-sm" onclick="unmarkForSale('${sid(a.id)}')" title="Retirer de la vente sans l'enregistrer comme vendu">✕</button>
+    </td>
   </tr>`).join('');
 }
 
@@ -8951,6 +8973,7 @@ function renderWishlist() {
     <td>${wishlistValueCell(w)}</td>
     <td style="font-size:11px;color:var(--text3)" title="${w.addedAt ? new Date(w.addedAt).toLocaleString('fr-FR') : ''}">${w.addedAt ? new Date(w.addedAt).toLocaleDateString('fr-FR') : '–'}</td>
     <td style="display:flex;gap:4px">
+      ${searchMenuBtn(w.artist, w.album)}
       <button class="btn btn-sm" onclick="openWishModal(${w.id})" title="Modifier">✎</button>
       <button class="btn btn-sm btn-danger" onclick="deleteWish(${w.id})" title="Supprimer">✕</button>
     </td>
@@ -9567,7 +9590,7 @@ function renderDiscographie() {
         </div>
       </td>
       <td onclick="event.stopPropagation()" style="display:flex;gap:4px;align-items:center">
-        ${assocBtn}${unlinkBtn}
+        ${assocBtn}${unlinkBtn}${searchMenuBtn(a.artist, a.album)}
         <button class="btn btn-sm" onclick="event.stopPropagation();${a.forSale?'unmarkForSale':'markForSale'}('${safeId}')" title="${a.forSale?'Retirer de la vente':'Marquer à vendre'}" style="${a.forSale?'color:var(--amber)':''}">💸</button>
       </td>
     </tr>`;
@@ -10927,6 +10950,7 @@ function exportJSON() {
     listeningHeatmap, listeningHeatmapComputedAt: _listeningHeatmapComputedAt,
     genreEvolution, genreEvolutionComputedAt: _genreEvolutionComputedAt,
     marketValueHistory,
+    salesLog,
     albumTracksCache,
     exportedAt: new Date().toISOString(),
     version: 3
@@ -10991,6 +11015,7 @@ async function reimportJSON(input) {
       genreEvolution = data.genreEvolution || [];
       _genreEvolutionComputedAt = data.genreEvolutionComputedAt || null;
       marketValueHistory = data.marketValueHistory || [];
+      if (Array.isArray(data.salesLog)) salesLog = data.salesLog;
       albumTracksCache = data.albumTracksCache || {};
       summary.push(`${wishlist.length + trackWishlist.length} entrées wishlist`, 'Insights/valeur collection/tracklists');
     }
@@ -14076,7 +14101,7 @@ let ratingQueueTracks = [];
 // file et n'y entre toujours pas (Session notation ne note que des éléments POSSÉDÉS).
 function buildRatingQueue() {
   return shuffleArray(
-    ownedAlbumsForCovers().filter(a => !a.note).map(a => a.id)
+    ownedAlbumsForCovers().filter(a => !a.note && rsAlbumMatchesFilters(a)).map(a => a.id)
   );
 }
 
@@ -14692,6 +14717,7 @@ function renderRatingSession() {
     if (emptyEl0) emptyEl0.style.display = 'none';
     if (cardEl0) cardEl0.style.display = 'none';
     if (scrobblesWrapEl) scrobblesWrapEl.style.display = 'block';
+    renderRsFiltersBar();
     if (!_scrobblesRaw.length && !_scrobblesLoading) loadRecentScrobbles(true);
     else renderScrobblesList();
     return;
@@ -14702,8 +14728,9 @@ function renderRatingSession() {
   // Retirer des files les entrées notées/supprimées entretemps ailleurs dans l'app
   ratingQueue = ratingQueue.filter(id => {
     const a = albums.find(x => x.id === id);
-    return a && !a.note;
+    return a && !a.note && rsAlbumMatchesFilters(a);
   });
+  renderRsFiltersBar();
   ratingQueueTracks = ratingQueueTracks.filter(id => {
     const t = tracks.find(x => x.id === id);
     return t && !t.note;
@@ -14716,7 +14743,8 @@ function renderRatingSession() {
   const labelEl = document.getElementById('rs-progress-label');
   const labelWord = mode === 'tracks' ? 'morceaux notés' : 'albums notés';
   if (fillEl) fillEl.style.width = pct + '%';
-  if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} ${labelWord}`;
+  if (labelEl) labelEl.textContent = `${ratedCount} / ${totalOwned} ${labelWord}`
+    + (mode === 'albums' && rsFiltersActive() ? ` · ${ratingQueue.length} à noter dans la sélection filtrée` : '');
 
   const queue = mode === 'tracks' ? ratingQueueTracks : ratingQueue;
   const emptyEl = document.getElementById('rs-empty');
@@ -14725,7 +14753,8 @@ function renderRatingSession() {
     if (emptyEl) {
       emptyEl.style.display = 'block';
       const msg = emptyEl.querySelector('div:last-child');
-      if (msg) msg.textContent = mode === 'tracks' ? 'Tous les morceaux isolés sont notés !' : 'Tous les albums possédés sont notés !';
+      if (msg) msg.textContent = mode === 'tracks' ? 'Tous les morceaux isolés sont notés !'
+        : rsFiltersActive() ? 'Aucun album non noté pour ces filtres.' : 'Tous les albums possédés sont notés !';
     }
     if (cardEl) cardEl.style.display = 'none';
     return;
@@ -14752,6 +14781,7 @@ function renderRatingSession() {
     if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
     if (tracklistWrapEl) tracklistWrapEl.style.display = 'none';
     rsRenderFolderInfo(null);
+    { const sl = document.getElementById('rs-search-links'); if (sl) sl.innerHTML = searchLinksHtml(t.artist, t.title, 'track'); }
     document.getElementById('rs-stars').innerHTML = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   } else {
     const a = albums.find(x => x.id === queue[0]);
@@ -14763,6 +14793,7 @@ function renderRatingSession() {
     document.getElementById('rs-meta').textContent = [a.year, a.genre].filter(Boolean).join(' · ');
     document.getElementById('rs-plays').textContent = a.plays ? `${a.plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
     rsRenderFolderInfo(a);
+    { const sl = document.getElementById('rs-search-links'); if (sl) sl.innerHTML = searchLinksHtml(a.artist, a.album, 'album'); }
 
     // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso.
     // BUG CORRIGÉ (v2026.07.10-26) : a.id manquant ici empêchait lookupRym() de retomber sur une
@@ -16531,6 +16562,700 @@ function renderArtistView() {
   }).join('') || '<div class="empty" style="padding:24px">Aucun résultat pour ce filtre.</div>';
 
   el.innerHTML = header + about + filters + `<div class="card">${listHeader}${list}</div>`;
+}
+
+// ===================== LIENS DE RECHERCHE DIRECTS (v2026.10.24-01) =====================
+// Demandé par Antoine (suite du bouton 📋 copie de la Session notation) : un clic ouvre une
+// recherche préremplie artiste + album/titre sur Discogs, RYM, Bandcamp ou MusicBrainz, au
+// lieu de copier / ouvrir le site / coller. Simples URL de recherche publiques, aucun appel
+// API — rien n'est persisté. 2 formes : un bouton 🔎 qui ouvre un petit menu flottant
+// (lignes de tableau, déjà chargées en boutons) et une rangée de liens inline (Session
+// notation, fiche album) là où la place le permet.
+const SEARCH_SITES = [
+  { key: 'discogs', label: 'Discogs', icon: '💿',
+    url: (ar, t, kind) => `https://www.discogs.com/search/?q=${encodeURIComponent((ar + ' ' + t).trim())}&type=${kind === 'artist' ? 'artist' : 'all'}` },
+  { key: 'rym', label: 'RYM', icon: '⭐',
+    url: (ar, t, kind) => `https://rateyourmusic.com/search?searchterm=${encodeURIComponent((ar + ' ' + t).trim())}&searchtype=${kind === 'artist' ? 'a' : kind === 'track' ? 'z' : 'l'}` },
+  { key: 'bandcamp', label: 'Bandcamp', icon: '🎪',
+    url: (ar, t, kind) => `https://bandcamp.com/search?q=${encodeURIComponent((ar + ' ' + t).trim())}&item_type=${kind === 'artist' ? 'b' : kind === 'track' ? 't' : 'a'}` },
+  { key: 'musicbrainz', label: 'MusicBrainz', icon: '🧠',
+    url: (ar, t, kind) => kind === 'artist'
+      ? `https://musicbrainz.org/search?query=${encodeURIComponent(ar)}&type=artist&method=indexed`
+      : kind === 'track'
+        ? `https://musicbrainz.org/search?query=${encodeURIComponent(`recording:"${t}" AND artist:"${ar}"`)}&type=recording&method=advanced`
+        : `https://musicbrainz.org/search?query=${encodeURIComponent(`releasegroup:"${t}" AND artist:"${ar}"`)}&type=release_group&method=advanced` },
+];
+
+function searchSiteUrl(siteKey, artist, title, kind) {
+  const site = SEARCH_SITES.find(s => s.key === siteKey);
+  return site ? site.url(cleanDiscogsArtist(artist || ''), title || '', kind || 'album') : '#';
+}
+
+// Rangée de liens inline (petits boutons) — kind : 'album' (défaut) | 'track' | 'artist'
+function searchLinksHtml(artist, title, kind) {
+  return `<span class="search-links" style="display:inline-flex;gap:4px;flex-wrap:wrap">${SEARCH_SITES.map(s =>
+    `<a class="btn btn-xs" href="${escAttr(searchSiteUrl(s.key, artist, title, kind))}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Chercher sur ${s.label}">${s.icon} ${s.label}</a>`
+  ).join('')}</span>`;
+}
+
+// Bouton 🔎 compact pour les lignes de tableau → menu flottant (un seul menu à la fois)
+function searchMenuBtn(artist, title, kind) {
+  return `<button class="btn btn-sm" onclick="event.stopPropagation();openSearchMenu(event,'${sid(artist || '')}','${sid(title || '')}','${kind || 'album'}')" title="Chercher sur Discogs / RYM / Bandcamp / MusicBrainz">🔎</button>`;
+}
+
+function openSearchMenu(ev, artistSid, titleSid, kind) {
+  closeSearchMenu();
+  const artist = unsid(artistSid), title = unsid(titleSid);
+  const menu = document.createElement('div');
+  menu.id = 'search-menu';
+  menu.style.cssText = 'position:fixed;z-index:3000;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:6px;display:flex;flex-direction:column;gap:2px;box-shadow:0 6px 24px rgba(0,0,0,0.5);min-width:170px';
+  menu.innerHTML = `<div style="font-size:10px;color:var(--text3);padding:2px 6px 4px;font-family:var(--mono);max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(artist)}${title ? ' — ' + esc(title) : ''}</div>` +
+    SEARCH_SITES.map(s => `<a href="${escAttr(searchSiteUrl(s.key, artist, title, kind))}" target="_blank" rel="noopener" onclick="closeSearchMenu()" style="color:var(--text);text-decoration:none;font-size:13px;padding:5px 8px;border-radius:4px" onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='transparent'">${s.icon} ${s.label}</a>`).join('') +
+    `<a href="#" onclick="event.preventDefault();closeSearchMenu();copyTextToClipboard(unsid('${sid((artist + ' ' + title).trim())}'))" style="color:var(--text2);text-decoration:none;font-size:12px;padding:5px 8px;border-top:1px solid var(--border);margin-top:2px">📋 Copier « artiste titre »</a>`;
+  document.body.appendChild(menu);
+  const r = (ev.currentTarget || ev.target).getBoundingClientRect();
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let left = r.right - mw, top = r.bottom + 4;
+  if (left < 8) left = 8;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+  setTimeout(() => document.addEventListener('click', _searchMenuOutside, { once: true }), 0);
+}
+function _searchMenuOutside(e) {
+  const m = document.getElementById('search-menu');
+  if (m && m.contains(e.target)) { document.addEventListener('click', _searchMenuOutside, { once: true }); return; }
+  closeSearchMenu();
+}
+function closeSearchMenu() { document.getElementById('search-menu')?.remove(); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSearchMenu(); });
+document.addEventListener('scroll', closeSearchMenu, true);
+
+// Copie générique (même logique que rsCopyField, réutilisable partout)
+function copyTextToClipboard(text, label) {
+  text = (text || '').trim();
+  if (!text) return;
+  const done = () => toast(`Copié : ${label || text}`);
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      ok ? done() : toast('Copie impossible dans ce navigateur', 'error');
+    } catch (e) { toast('Copie impossible dans ce navigateur', 'error'); }
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+}
+
+// ===================== SESSION NOTATION — FILTRES (v2026.10.24-01) =====================
+// La file albums n'était filtrable d'aucune façon (aléatoire sur toute la collection non
+// notée). Filtres appliqués à la construction de la file ET au rendu (une note posée ailleurs
+// ou un changement de dossier sort l'album de la file au prochain affichage). Mémorisés en
+// localStorage (préférence d'affichage locale, comme les préréglages de filtres).
+const RS_FILTERS_LS_KEY = 'terant_rs_filters_v1';
+let rsFilters = { folder: '', genre: '', artist: '', minPlays: 0, rymOnly: false };
+try { const saved = JSON.parse(localStorage.getItem(RS_FILTERS_LS_KEY) || 'null'); if (saved) rsFilters = { ...rsFilters, ...saved }; } catch (e) {}
+
+function albumInFolder(a, folder) {
+  const f = a.folders || [];
+  if (folder === 'discographie') return f.includes('discographie') || a.primaryFolder === 'discographie';
+  if (folder === 'stock')        return f.includes('stock') || a.primaryFolder === 'stock';
+  if (folder === 'ok')           return !!a.okFolder || f.includes('ok');
+  if (folder === 'forsale')      return !!a.forSale || f.includes('forsale');
+  if (folder === 'cd')           return !!(a.cd || a.has_cd);
+  return true;
+}
+
+function rsAlbumMatchesFilters(a) {
+  const F = rsFilters;
+  if (F.folder && !albumInFolder(a, F.folder)) return false;
+  if (F.genre && !(a.genre || '').toLowerCase().includes(F.genre.toLowerCase())) return false;
+  if (F.artist && !(a.artist || '').toLowerCase().includes(F.artist.toLowerCase())) return false;
+  if (F.minPlays && (a.plays || 0) < F.minPlays) return false;
+  if (F.rymOnly) {
+    const r = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
+    if (!r?.rating) return false;
+  }
+  return true;
+}
+
+function rsFiltersActive() {
+  const F = rsFilters;
+  return !!(F.folder || F.genre || F.artist || F.minPlays || F.rymOnly);
+}
+
+function renderRsFiltersBar() {
+  const bar = document.getElementById('rs-filters');
+  if (!bar) return;
+  bar.style.display = ratingSessionMode === 'albums' ? 'flex' : 'none';
+  if (ratingSessionMode !== 'albums') return;
+  const genreSel = document.getElementById('rs-filter-genre');
+  if (genreSel) {
+    const genres = [...new Set(ownedAlbumsForCovers().filter(a => !a.note).map(a => a.genre).filter(Boolean))].sort((x, y) => x.localeCompare(y, 'fr'));
+    genreSel.innerHTML = '<option value="">Tous genres</option>' + genres.map(g => `<option value="${escAttr(g)}">${esc(g)}</option>`).join('');
+    genreSel.value = genres.includes(rsFilters.genre) ? rsFilters.genre : '';
+  }
+  const set = (id, v) => { const el = document.getElementById(id); if (el) { if (el.type === 'checkbox') el.checked = !!v; else el.value = v || ''; } };
+  set('rs-filter-folder', rsFilters.folder);
+  set('rs-filter-artist', rsFilters.artist);
+  set('rs-filter-minplays', rsFilters.minPlays || '');
+  set('rs-filter-rym', rsFilters.rymOnly);
+}
+
+function onRsFiltersChange() {
+  const v = id => document.getElementById(id);
+  rsFilters = {
+    folder: v('rs-filter-folder')?.value || '',
+    genre: v('rs-filter-genre')?.value || '',
+    artist: (v('rs-filter-artist')?.value || '').trim(),
+    minPlays: parseInt(v('rs-filter-minplays')?.value || '0', 10) || 0,
+    rymOnly: !!v('rs-filter-rym')?.checked,
+  };
+  try { localStorage.setItem(RS_FILTERS_LS_KEY, JSON.stringify(rsFilters)); } catch (e) {}
+  ratingQueue = buildRatingQueue();
+  renderRatingSession();
+}
+const onRsFiltersChangeDebounced = debounce(onRsFiltersChange, 250);
+
+function resetRsFilters() {
+  rsFilters = { folder: '', genre: '', artist: '', minPlays: 0, rymOnly: false };
+  try { localStorage.removeItem(RS_FILTERS_LS_KEY); } catch (e) {}
+  renderRsFiltersBar();
+  ratingQueue = buildRatingQueue();
+  renderRatingSession();
+}
+
+// ===================== SUIVI DES VENTES (v2026.10.24-01) =====================
+// Avant : le ✓ de l'onglet Vendre retirait simplement le flag « à vendre », sans aucune trace
+// du prix ni de la date. Désormais « 💰 Vendu » ouvre une petite modale (prix, date, canal,
+// note), écrit une entrée dans salesLog puis retire le flag. Le journal vit à part de la fiche
+// album : celle-ci disparaîtra au prochain réimport Discogs une fois le CD retiré de la
+// collection Discogs (principe « ajouts/suppressions uniquement via les imports » inchangé),
+// alors que la vente, elle, doit rester consultable.
+let _saleTargetId = null;
+let _forSaleTab = 'list'; // 'list' | 'history'
+const SALE_CHANNELS = ['Discogs', 'Leboncoin', 'Vinted', 'eBay', 'Disquaire', 'Main propre', 'Autre'];
+
+function setForSaleTab(tab) {
+  _forSaleTab = tab;
+  ['list', 'history'].forEach(t => {
+    document.getElementById('forsale-tab-btn-' + t)?.classList.toggle('active', t === tab);
+    const pane = document.getElementById('forsale-pane-' + t);
+    if (pane) pane.style.display = t === tab ? 'block' : 'none';
+  });
+  if (tab === 'history') renderSalesHistory(); else renderForSale();
+}
+
+function openSaleModal(idSid) {
+  const realId = unsid(idSid);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
+  if (!a) return;
+  _saleTargetId = a.id;
+  document.getElementById('sale-album-label').textContent = `${a.artist} — ${a.album}${a.year ? ' (' + a.year + ')' : ''}`;
+  const est = a.marketplace_price != null ? `Estimation Discogs (prix le plus bas) : ${Number(a.marketplace_price).toFixed(2)} ${a.marketplace_currency || 'EUR'}` : 'Pas d’estimation Discogs connue';
+  document.getElementById('sale-estimate').textContent = est;
+  document.getElementById('sale-price').value = a.marketplace_price != null ? Number(a.marketplace_price).toFixed(2) : '';
+  document.getElementById('sale-date').value = new Date().toISOString().slice(0, 10);
+  const ch = document.getElementById('sale-channel');
+  let last = '';
+  try { last = localStorage.getItem('terant_last_sale_channel') || ''; } catch (e) {}
+  ch.innerHTML = SALE_CHANNELS.map(c => `<option ${c === last ? 'selected' : ''}>${c}</option>`).join('');
+  document.getElementById('sale-notes').value = '';
+  document.getElementById('modal-sale').classList.add('open');
+  setTimeout(() => document.getElementById('sale-price')?.select(), 50);
+}
+function closeSaleModal() { document.getElementById('modal-sale').classList.remove('open'); _saleTargetId = null; }
+
+function confirmSale() {
+  const a = albums.find(x => x.id === _saleTargetId);
+  if (!a) { closeSaleModal(); return; }
+  const raw = (document.getElementById('sale-price').value || '').trim().replace(',', '.');
+  const price = parseFloat(raw);
+  if (raw === '' || isNaN(price) || price < 0) { toast('Prix de vente invalide', 'warn'); return; }
+  const channel = document.getElementById('sale-channel').value || '';
+  try { localStorage.setItem('terant_last_sale_channel', channel); } catch (e) {}
+  salesLog.push({
+    id: 'sale_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    albumId: a.id, artist: a.artist, album: a.album, year: a.year || '',
+    label: a.label || '', catno: a.catno || '', discogsId: a.discogsId || '',
+    price: Math.round(price * 100) / 100, currency: 'EUR',
+    soldAt: document.getElementById('sale-date').value || new Date().toISOString().slice(0, 10),
+    channel, notes: (document.getElementById('sale-notes').value || '').trim(),
+    estimate: a.marketplace_price ?? null, estimateCurrency: a.marketplace_currency || null,
+    cover_url: a.cover_url || null,
+  });
+  // Retire le flag « à vendre » (même mutation que unmarkForSale, qui sauvegarde et rafraîchit)
+  unmarkForSale(sid(a.id));
+  closeSaleModal();
+  toast(`Vente enregistrée : ${a.artist} — ${a.album} (${price.toFixed(2)} €)`);
+  if (_forSaleTab === 'history') renderSalesHistory();
+  renderSalesSummary();
+}
+
+function deleteSale(id) {
+  const s = salesLog.find(x => x.id === id);
+  if (!s) return;
+  if (!confirm(`Supprimer la vente « ${s.artist} — ${s.album} » du journal ?\n\n(Ne remet pas l'album en vente — il suffit de le re-marquer 💸 si besoin.)`)) return;
+  salesLog = salesLog.filter(x => x.id !== id);
+  saveToStorage();
+  renderSalesHistory();
+  renderSalesSummary();
+}
+
+function salesYearsAvailable() {
+  return [...new Set(salesLog.map(s => (s.soldAt || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+}
+
+function renderSalesSummary() {
+  const el = document.getElementById('sales-summary');
+  if (!el) return;
+  const total = salesLog.reduce((t, s) => t + (s.price || 0), 0);
+  const withEst = salesLog.filter(s => s.estimate != null);
+  const diff = withEst.reduce((t, s) => t + (s.price - s.estimate), 0);
+  const forSaleNow = albums.filter(a => a.forSale);
+  const stock = forSaleNow.reduce((t, a) => t + (a.marketplace_price != null ? Number(a.marketplace_price) : 0), 0);
+  const card = (val, label, color) => `<div class="stat-card"><div class="stat-val" style="font-size:20px;${color ? 'color:' + color : ''}">${val}</div><div class="stat-label">${label}</div></div>`;
+  el.innerHTML =
+    card(salesLog.length, 'Ventes enregistrées') +
+    card(total.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' }), 'Total encaissé', 'var(--accent)') +
+    card(withEst.length ? (diff >= 0 ? '+' : '') + diff.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' }) : '–', `Écart vs estimation Discogs${withEst.length ? ` (${withEst.length} vente${withEst.length > 1 ? 's' : ''})` : ''}`, diff >= 0 ? 'var(--accent)' : 'var(--red)') +
+    card(forSaleNow.length, 'Encore à vendre') +
+    card(stock ? '≈ ' + stock.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' }) : '–', 'Valeur estimée restante');
+}
+
+function renderSalesHistory() {
+  renderSalesSummary();
+  const yearSel = document.getElementById('sales-filter-year');
+  if (yearSel) {
+    const cur = yearSel.value;
+    const years = salesYearsAvailable();
+    yearSel.innerHTML = '<option value="">Toutes années</option>' + years.map(y => `<option ${y === cur ? 'selected' : ''}>${y}</option>`).join('');
+  }
+  const chSel = document.getElementById('sales-filter-channel');
+  if (chSel && chSel.options.length <= 1) chSel.innerHTML = '<option value="">Tous canaux</option>' + SALE_CHANNELS.map(c => `<option>${c}</option>`).join('');
+  const yf = yearSel?.value || '';
+  const cf = chSel?.value || '';
+  const q = (document.getElementById('sales-filter-q')?.value || '').toLowerCase().trim();
+  const list = salesLog
+    .filter(s => (!yf || (s.soldAt || '').startsWith(yf)) && (!cf || s.channel === cf) && (!q || (s.artist + ' ' + s.album).toLowerCase().includes(q)))
+    .sort((a, b) => (b.soldAt || '').localeCompare(a.soldAt || ''));
+  const sub = list.reduce((t, s) => t + (s.price || 0), 0);
+  const ctr = document.getElementById('sales-counter');
+  if (ctr) ctr.textContent = `${list.length} vente${list.length > 1 ? 's' : ''} · ${sub.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}`;
+  const tbody = document.getElementById('sales-tbody');
+  if (!tbody) return;
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty"><div class="empty-icon">💰</div>${salesLog.length ? 'Aucune vente avec ces filtres.' : 'Aucune vente enregistrée. Utilise « 💰 Vendu » dans l’onglet À vendre.'}</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = list.map(s => {
+    const d = s.estimate != null ? s.price - s.estimate : null;
+    const diffHtml = d == null ? '<span style="color:var(--text3)">–</span>'
+      : `<span style="font-family:var(--mono);font-size:12px;color:${d >= 0 ? 'var(--accent)' : 'var(--red)'}">${d >= 0 ? '+' : ''}${d.toFixed(2)}</span>`;
+    const cover = s.cover_url ? `<img src="${escAttr(s.cover_url)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" onerror="this.remove()">` : initials(s.artist);
+    return `<tr>
+      <td><div class="artist-cell"><div class="artist-avatar">${cover}</div><div class="artist-info"><div class="name">${esc(s.album)}</div><div class="sub">${esc(s.artist)}${s.year ? ' · ' + esc(s.year) : ''}${s.discogsId ? ` <a href="https://www.discogs.com/release/${encodeURIComponent(s.discogsId)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none">#${esc(s.discogsId)}</a>` : ''}</div></div></div></td>
+      <td class="mono">${s.soldAt ? new Date(s.soldAt + 'T12:00:00').toLocaleDateString('fr-FR') : '–'}</td>
+      <td style="font-size:12px">${esc(s.channel || '–')}</td>
+      <td class="mono" style="color:var(--text)">${(s.price || 0).toFixed(2)} €</td>
+      <td class="mono">${s.estimate != null ? Number(s.estimate).toFixed(2) + ' ' + (s.estimateCurrency === 'EUR' || !s.estimateCurrency ? '€' : s.estimateCurrency) : '–'}</td>
+      <td>${diffHtml}</td>
+      <td style="display:flex;gap:4px;align-items:center">${s.notes ? `<span title="${escAttr(s.notes)}" style="cursor:help">📝</span>` : ''}<button class="btn btn-sm btn-danger" onclick="deleteSale('${s.id}')" title="Supprimer du journal">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function exportSalesCSV() {
+  const rows = [['Date', 'Artiste', 'Album', 'Année', 'Label', 'Réf.', 'Discogs ID', 'Canal', 'Prix (€)', 'Estimation Discogs', 'Écart', 'Notes']];
+  [...salesLog].sort((a, b) => (a.soldAt || '').localeCompare(b.soldAt || '')).forEach(s => {
+    rows.push([s.soldAt, s.artist, s.album, s.year, s.label, s.catno, s.discogsId, s.channel, (s.price || 0).toFixed(2),
+      s.estimate != null ? Number(s.estimate).toFixed(2) : '', s.estimate != null ? (s.price - s.estimate).toFixed(2) : '', s.notes || '']);
+  });
+  download(`ventes_${new Date().toISOString().slice(0, 10)}.csv`, '﻿' + rows.map(toCSVRow).join('\n'), 'text/csv;charset=utf-8');
+  toast(`${salesLog.length} vente(s) exportée(s) ✓`);
+}
+
+// Texte d'annonce prêt à coller (Leboncoin/Vinted/Discogs…) — construit depuis la fiche, l'état
+// du disque n'étant connu nulle part dans l'app il reste à compléter (ligne « État : » laissée).
+function buildListingText(a) {
+  const tracks = (albumTracksCache[a.id] || []).filter(t => t.source === 'discogs').length
+    ? (albumTracksCache[a.id] || []).filter(t => t.source === 'discogs')
+    : (albumTracksCache[a.id] || []).filter(t => t.source === 'musicbee');
+  const fmt = a.cd || a.has_cd ? 'CD' : 'Album';
+  const lines = [
+    `${a.artist} — ${a.album}${a.year ? ' (' + a.year + ')' : ''}`,
+    '',
+    `Format : ${fmt}`,
+  ];
+  if (a.label) lines.push(`Label : ${a.label}${a.catno ? ' — réf. ' + a.catno : ''}`);
+  if (a.genre) lines.push(`Genre : ${a.genre}`);
+  lines.push('État : ');
+  if (tracks.length) {
+    lines.push('', 'Titres :');
+    tracks.slice(0, 30).forEach((t, i) => lines.push(`${t.position || (i + 1)}. ${t.title}`));
+  }
+  if (a.discogsId) lines.push('', `Discogs : https://www.discogs.com/release/${a.discogsId}`);
+  return lines.join('\n');
+}
+
+function copyListingText(idSid) {
+  const realId = unsid(idSid);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
+  if (!a) return;
+  copyTextToClipboard(buildListingText(a), 'texte d’annonce');
+}
+
+// ===================== TOPS PAR PÉRIODE (v2026.10.24-01) =====================
+// Demandé par Antoine : « comme sur last.fm, afficher les plus écoutés par semaine, mois, an…
+// avec des filtres genre, année de parution ». Deux familles de périodes :
+//  - glissantes (7 jours, 1/3/6/12 mois, tout) → user.gettop{albums,artists,tracks}&period=…
+//    (1 seul appel, limit 500) ;
+//  - civiles (mois ou année précis) → user.getweekly{album,artist,track}chart&from=&to= sur la
+//    plage complète en 1 appel ; si last.fm ne renvoie rien (plage non alignée sur ses semaines),
+//    repli automatique : somme des charts hebdo de la plage (getweeklychartlist, ~4 appels pour
+//    un mois, ~52 pour une année, pacés 250ms).
+// Les filtres genre / année de parution / possession sont calculés côté client en croisant
+// chaque entrée avec la collection (genre et année d'origine de l'album possédé, repli RYM
+// sinon) — d'où un fetch large (500) puis un filtrage local, sans rappeler last.fm. Résultats
+// mis en cache le temps de la session (clé = type + période), jamais persistés.
+const TOPS_PERIODS = [
+  { v: '7day', label: '7 derniers jours' },
+  { v: '1month', label: '30 derniers jours' },
+  { v: '3month', label: '3 derniers mois' },
+  { v: '6month', label: '6 derniers mois' },
+  { v: '12month', label: '12 derniers mois' },
+  { v: 'overall', label: 'Depuis le début' },
+  { v: 'month', label: 'Mois précis…' },
+  { v: 'year', label: 'Année précise…' },
+];
+const TOPS_FETCH_LIMIT = 500;
+const TOPS_ROW_CSS = 'display:flex;align-items:center;gap:12px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);';
+let _topsCache = {};      // { cacheKey: { items, fetchedAt, source } }
+let _topsLoading = false;
+let _topsType = 'albums'; // 'albums' | 'artists' | 'tracks'
+
+function setTopsType(t) {
+  _topsType = t;
+  ['albums', 'artists', 'tracks'].forEach(k => document.getElementById('tops-type-btn-' + k)?.classList.toggle('active', k === t));
+  const yr = document.getElementById('tops-year-filters');
+  if (yr) yr.style.opacity = t === 'artists' ? '0.4' : '1';
+  loadTops();
+}
+
+function initTopsView() {
+  const ps = document.getElementById('tops-period');
+  if (ps && !ps.options.length) ps.innerHTML = TOPS_PERIODS.map(p => `<option value="${p.v}">${p.label}</option>`).join('');
+  const ys = document.getElementById('tops-cal-year');
+  if (ys && !ys.options.length) {
+    const now = new Date().getFullYear();
+    let html = '';
+    for (let y = now; y >= 2002; y--) html += `<option value="${y}">${y}</option>`;
+    ys.innerHTML = html;
+  }
+  const ms = document.getElementById('tops-cal-month');
+  if (ms && !ms.options.length) {
+    ms.innerHTML = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre']
+      .map((m, i) => `<option value="${i + 1}">${m}</option>`).join('');
+    ms.value = String(new Date().getMonth() + 1);
+  }
+  const gs = document.getElementById('tops-filter-genre');
+  if (gs) {
+    const cur = gs.value;
+    const genres = genreList();
+    gs.innerHTML = '<option value="">Tous genres</option>' + genres.map(g => `<option value="${escAttr(g)}" ${g === cur ? 'selected' : ''}>${esc(g)}</option>`).join('');
+  }
+  onTopsPeriodChange(true);
+}
+
+function onTopsPeriodChange(silent) {
+  const p = document.getElementById('tops-period')?.value || '7day';
+  const ys = document.getElementById('tops-cal-year');
+  const ms = document.getElementById('tops-cal-month');
+  if (ys) ys.style.display = (p === 'year' || p === 'month') ? '' : 'none';
+  if (ms) ms.style.display = p === 'month' ? '' : 'none';
+  loadTops();
+}
+
+function topsRange() {
+  const p = document.getElementById('tops-period')?.value || '7day';
+  if (p !== 'year' && p !== 'month') return { period: p, key: p, label: TOPS_PERIODS.find(x => x.v === p)?.label || p };
+  const y = parseInt(document.getElementById('tops-cal-year')?.value || new Date().getFullYear(), 10);
+  if (p === 'year') {
+    const from = Math.floor(Date.UTC(y, 0, 1) / 1000), to = Math.floor(Date.UTC(y + 1, 0, 1) / 1000) - 1;
+    return { period: 'range', from, to, key: 'y' + y, label: String(y) };
+  }
+  const m = parseInt(document.getElementById('tops-cal-month')?.value || '1', 10);
+  const from = Math.floor(Date.UTC(y, m - 1, 1) / 1000), to = Math.floor(Date.UTC(y, m, 1) / 1000) - 1;
+  const label = new Date(Date.UTC(y, m - 1, 15)).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  return { period: 'range', from, to, key: `m${y}-${m}`, label };
+}
+
+async function lfmGet(params) {
+  const qs = new URLSearchParams({ ...params, user: _lastfmUser, api_key: _lastfmApiKey, format: 'json' });
+  const res = await fetch(`${LASTFM_BASE}?${qs}`);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  if (data.error) throw new Error(data.message || ('last.fm erreur ' + data.error));
+  return data;
+}
+
+// Normalise les différentes formes de réponse last.fm en { name, artist, plays, image, mbid }
+function _topsNormalize(type, raw) {
+  const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
+  const img = it => { const im = arr(it.image); const best = im.find(i => i.size === 'large') || im.find(i => i.size === 'medium') || im[im.length - 1]; const u = best?.['#text'] || ''; return u.includes('2a96cbd8b46e442fc41c2b86b821562f') ? '' : u; };
+  const artistName = it => typeof it.artist === 'string' ? it.artist : (it.artist?.name || it.artist?.['#text'] || '');
+  if (type === 'artists') return arr(raw).map(it => ({ name: it.name, artist: it.name, plays: parseInt(it.playcount, 10) || 0, image: img(it), mbid: it.mbid || '' }));
+  return arr(raw).map(it => ({ name: typeof it.name === 'string' ? it.name : (it.name?.['#text'] || ''), artist: artistName(it), plays: parseInt(it.playcount, 10) || 0, image: img(it), mbid: it.mbid || '' }));
+}
+
+async function fetchTops(type, range, onProgress) {
+  const m = { albums: ['user.gettopalbums', 'user.getweeklyalbumchart', 'topalbums', 'weeklyalbumchart', 'album'],
+              artists: ['user.gettopartists', 'user.getweeklyartistchart', 'topartists', 'weeklyartistchart', 'artist'],
+              tracks: ['user.gettoptracks', 'user.getweeklytrackchart', 'toptracks', 'weeklytrackchart', 'track'] }[type];
+  if (range.period !== 'range') {
+    const d = await lfmGet({ method: m[0], period: range.period, limit: TOPS_FETCH_LIMIT });
+    return { items: _topsNormalize(type, d[m[2]]?.[m[4]]), source: 'top' };
+  }
+  // Plage civile : 1 appel direct sur toute la plage…
+  try {
+    const d = await lfmGet({ method: m[1], from: range.from, to: range.to });
+    const items = _topsNormalize(type, d[m[3]]?.[m[4]]);
+    if (items.length) return { items, source: 'range' };
+  } catch (e) { /* repli ci-dessous */ }
+  // …sinon somme des charts hebdomadaires qui chevauchent la plage
+  const list = await lfmGet({ method: 'user.getweeklychartlist' });
+  const weeks = (Array.isArray(list.weeklychartlist?.chart) ? list.weeklychartlist.chart : [])
+    .map(w => ({ from: +w.from, to: +w.to }))
+    .filter(w => w.to > range.from && w.from < range.to);
+  const acc = new Map();
+  for (let i = 0; i < weeks.length; i++) {
+    if (onProgress) onProgress(i + 1, weeks.length);
+    try {
+      const d = await lfmGet({ method: m[1], from: weeks[i].from, to: weeks[i].to });
+      _topsNormalize(type, d[m[3]]?.[m[4]]).forEach(it => {
+        const k = normalizeKey(it.artist, type === 'artists' ? '' : it.name);
+        const prev = acc.get(k);
+        if (prev) prev.plays += it.plays; else acc.set(k, { ...it });
+      });
+    } catch (e) { console.warn('Tops : semaine ignorée', weeks[i], e.message || e); }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return { items: [...acc.values()].sort((a, b) => b.plays - a.plays), source: 'weekly' };
+}
+
+async function loadTops(force) {
+  const el = document.getElementById('tops-list');
+  if (!el) return;
+  if (!_lastfmUser || !_lastfmApiKey) { el.innerHTML = '<div class="empty"><div class="empty-icon">📈</div>Configure last.fm dans Import / Export d’abord.</div>'; return; }
+  const range = topsRange();
+  const ck = _topsType + '|' + range.key;
+  if (!force && _topsCache[ck]) { renderTops(); return; }
+  if (_topsLoading) return;
+  _topsLoading = true;
+  const status = document.getElementById('tops-status');
+  if (status) status.textContent = 'Chargement last.fm…';
+  el.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div>Chargement…</div>';
+  try {
+    const res = await fetchTops(_topsType, range, (i, n) => { if (status) status.textContent = `Agrégation des semaines… ${i}/${n}`; });
+    _topsCache[ck] = { ...res, fetchedAt: Date.now() };
+  } catch (e) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">⚠️</div>Erreur last.fm : ${esc(e.message || String(e))}</div>`;
+    if (status) status.textContent = '';
+    _topsLoading = false;
+    return;
+  }
+  _topsLoading = false;
+  // L'utilisateur a pu changer de type/période pendant le chargement
+  if (_topsType + '|' + topsRange().key !== ck) { loadTops(); return; }
+  renderTops();
+}
+
+// Index de croisement avec la collection (reconstruit seulement quand _cache est invalidé)
+function topsIndexes() {
+  if (_cache.topsIdx) return _cache.topsIdx;
+  const albumByKey = new Map();
+  const albumsByArtist = new Map();
+  const trackToAlbum = new Map();
+  const isolated = new Map();
+  albums.forEach(a => {
+    const albumNorm = normalizeKey('', a.album).replace('|||', '');
+    for (const av of artistVariants(a.artist)) {
+      const k = av + '|||' + albumNorm;
+      if (!albumByKey.has(k)) albumByKey.set(k, a);
+      if (!albumsByArtist.has(av)) albumsByArtist.set(av, []);
+      albumsByArtist.get(av).push(a);
+    }
+    (a.lastfmAliases || []).forEach(k => { if (!albumByKey.has(k)) albumByKey.set(k, a); });
+    (albumTracksCache[a.id] || []).forEach(t => {
+      if (!t.title) return;
+      [a.artist, t.trackArtist].filter(Boolean).forEach(ar => {
+        for (const av of artistVariants(ar)) {
+          const k = av + '|||' + normalizeKey('', t.title).replace('|||', '');
+          if (!trackToAlbum.has(k)) trackToAlbum.set(k, a);
+        }
+      });
+    });
+  });
+  tracks.forEach(t => { for (const av of artistVariants(t.artist)) isolated.set(av + '|||' + normalizeKey('', t.title).replace('|||', ''), t); });
+  albumsByArtist.forEach((list, k) => albumsByArtist.set(k, [...new Set(list)]));
+  return (_cache.topsIdx = { albumByKey, albumsByArtist, trackToAlbum, isolated });
+}
+
+function _topsLookup(map, artist, title) {
+  const tn = normalizeKey('', title).replace('|||', '');
+  for (const av of artistVariants(artist)) { const hit = map.get(av + '|||' + tn); if (hit) return hit; }
+  return null;
+}
+
+// Enrichit une entrée last.fm avec possession / genre / année / wishlist
+function topsEnrich(type, it, wishKeys) {
+  const idx = topsIndexes();
+  const out = { ...it, owned: null, ownedCount: 0, genre: '', year: null, inWish: false };
+  if (type === 'albums') {
+    const a = _topsLookup(idx.albumByKey, it.artist, it.name);
+    const rym = lookupRym(it.artist, it.name, a?.id) || lookupRym(cleanDiscogsArtist(it.artist), it.name, a?.id);
+    out.owned = a;
+    out.genre = a?.genre || rym?.genre || '';
+    out.year = a ? (originalYearOf(a) || null) : (parseInt(rym?.year, 10) || null);
+    out.rym = rym?.rating || 0;
+    out.note = a?.note || 0;
+    out.inWish = wishKeys.has(normalizeKey(it.artist, it.name));
+  } else if (type === 'artists') {
+    let list = [];
+    for (const av of artistVariants(it.artist)) { const l = idx.albumsByArtist.get(av); if (l) { list = l; break; } }
+    out.ownedCount = list.length;
+    const gc = {};
+    list.forEach(a => (a.genre || '').split(/[;,/]/).map(g => g.trim()).filter(Boolean).forEach(g => { gc[g] = (gc[g] || 0) + 1; }));
+    out.genres = Object.entries(gc).sort((x, y) => y[1] - x[1]).map(e => e[0]);
+    out.genre = out.genres.join(', ');
+  } else {
+    const a = _topsLookup(idx.trackToAlbum, it.artist, it.name);
+    const isIso = !a && !!_topsLookup(idx.isolated, it.artist, it.name);
+    out.owned = a || (isIso ? { isolated: true } : null);
+    out.album = a;
+    out.genre = a?.genre || '';
+    out.year = a ? (originalYearOf(a) || null) : null;
+  }
+  return out;
+}
+
+function renderTops() {
+  const el = document.getElementById('tops-list');
+  if (!el) return;
+  const range = topsRange();
+  const cached = _topsCache[_topsType + '|' + range.key];
+  if (!cached) { loadTops(); return; }
+  const genreF = (document.getElementById('tops-filter-genre')?.value || '').toLowerCase();
+  const yMin = parseInt(document.getElementById('tops-filter-ymin')?.value || '', 10);
+  const yMax = parseInt(document.getElementById('tops-filter-ymax')?.value || '', 10);
+  const own = document.getElementById('tops-filter-owned')?.value || '';
+  const q = (document.getElementById('tops-filter-q')?.value || '').toLowerCase().trim();
+  const limit = parseInt(document.getElementById('tops-limit')?.value || '50', 10);
+  const wishKeys = new Set(wishlist.map(w => normalizeKey(w.artist, w.album)));
+  const yearApplies = _topsType !== 'artists' && (!isNaN(yMin) || !isNaN(yMax));
+
+  // Le rang last.fm d'origine est conservé (#), même quand les filtres masquent des entrées
+  let rows = cached.items.map((it, i) => ({ ...topsEnrich(_topsType, it, wishKeys), rank: i + 1 }));
+  rows = rows.filter(r => {
+    if (q && !(r.artist + ' ' + r.name).toLowerCase().includes(q)) return false;
+    if (genreF && !(r.genre || '').toLowerCase().includes(genreF)) return false;
+    if (yearApplies) {
+      if (!r.year) return false;
+      if (!isNaN(yMin) && r.year < yMin) return false;
+      if (!isNaN(yMax) && r.year > yMax) return false;
+    }
+    const isOwned = _topsType === 'artists' ? r.ownedCount > 0 : !!r.owned;
+    if (own === 'owned' && !isOwned) return false;
+    if (own === 'missing' && isOwned) return false;
+    if (own === 'wish' && !r.inWish) return false;
+    return true;
+  });
+
+  const total = rows.length;
+  const shown = rows.slice(0, limit);
+  const totalPlays = cached.items.reduce((t, r) => t + r.plays, 0);
+  const status = document.getElementById('tops-status');
+  if (status) {
+    const age = Math.round((Date.now() - cached.fetchedAt) / 60000);
+    const src = cached.source === 'weekly' ? ' · agrégé semaine par semaine' : '';
+    status.textContent = `${range.label} · ${cached.items.length} ${_topsType === 'albums' ? 'albums' : _topsType === 'artists' ? 'artistes' : 'morceaux'} · ${totalPlays.toLocaleString('fr-FR')} écoutes${src} · ${total !== cached.items.length ? total + ' après filtres · ' : ''}${age < 1 ? 'à l’instant' : 'il y a ' + age + ' min'}`;
+  }
+  if (!shown.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">🕳️</div>${cached.items.length ? 'Aucun résultat avec ces filtres.' : 'last.fm n’a rien renvoyé pour cette période.'}${cached.items.length >= TOPS_FETCH_LIMIT ? '<div style="font-size:11px;margin-top:6px">(filtres appliqués aux ' + TOPS_FETCH_LIMIT + ' premiers de la période)</div>' : ''}</div>`;
+    return;
+  }
+  const maxPlays = Math.max(...shown.map(r => r.plays), 1);
+  el.innerHTML = shown.map(r => {
+    const cover = _topsType === 'albums' && r.owned?.cover_url ? albumAvatar(r.owned)
+      : r.image ? `<img src="${escAttr(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" onerror="this.remove()">`
+      : initials(r.artist);
+    const badges = [];
+    if (_topsType === 'artists') {
+      if (r.ownedCount) badges.push(`<span class="badge badge-flac">${r.ownedCount} album${r.ownedCount > 1 ? 's' : ''}</span>`);
+      else badges.push('<span class="badge badge-missing">non possédé</span>');
+    } else if (r.owned) {
+      badges.push(r.owned.isolated ? '<span class="badge badge-flac">morceau isolé</span>' : `<span class="badge badge-flac">possédé</span>`);
+      if (r.owned.cd || r.owned.has_cd) badges.push('<span class="badge badge-cd">CD</span>');
+    } else badges.push('<span class="badge badge-missing">non possédé</span>');
+    if (r.inWish) badges.push('<span class="badge badge-stock" style="color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 wishlist</span>');
+    const meta = [r.year || '', (r.genre || '').split(/[;,]/)[0].trim(), _topsType === 'tracks' && r.album ? r.album.album : '']
+      .filter(Boolean).map(esc).join(' · ');
+    const notes = _topsType === 'albums' && (r.note || r.rym)
+      ? `<span style="font-family:var(--mono);font-size:11px;color:var(--text3)">${r.note ? `<span style="color:var(--accent)">${r.note.toFixed(1)}★</span>` : ''}${r.note && r.rym ? ' · ' : ''}${r.rym ? `<span style="color:var(--amber)">RYM ${r.rym.toFixed(2)}</span>` : ''}</span>` : '';
+    const title = _topsType === 'artists' ? artistLink(r.artist) : esc(r.name);
+    const sub = _topsType === 'artists' ? '' : artistLink(r.artist);
+    const openOwned = _topsType === 'albums' && r.owned ? `editAlbum('${sid(r.owned.id)}')` : '';
+    const kind = _topsType === 'artists' ? 'artist' : _topsType === 'tracks' ? 'track' : 'album';
+    const actions = [
+      `<button class="btn btn-sm" onclick="event.stopPropagation();openYouTubeMusicSearch(unsid('${sid(r.artist)}'), unsid('${sid(_topsType === 'artists' ? '' : r.name)}'))" title="Écouter sur YouTube Music">▶️</button>`,
+      searchMenuBtn(r.artist, _topsType === 'artists' ? '' : r.name, kind),
+      _topsType === 'albums' && !r.owned && !r.inWish
+        ? `<button class="btn btn-sm" onclick="event.stopPropagation();topsAddToWishlist('${sid(r.artist)}','${sid(r.name)}',${r.plays})" title="Ajouter à la wishlist">🎯</button>` : '',
+    ].join('');
+    return `<div style="${TOPS_ROW_CSS}${openOwned ? 'cursor:pointer;' : ''}" ${openOwned ? `onclick="${openOwned}"` : ''} onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-family:var(--mono);font-size:13px;color:var(--text3);width:34px;text-align:right;flex-shrink:0">${r.rank}</div>
+      <div class="artist-avatar" style="width:40px;height:40px">${cover}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
+        <div style="font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sub}${sub && meta ? ' · ' : ''}<span style="color:var(--text3)">${meta}</span></div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;align-items:center">${badges.join('')}${notes}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;width:150px">
+        <div class="plays-bar" style="min-width:80px"><div class="plays-fill" style="width:${Math.round(r.plays / maxPlays * 100)}%"></div></div>
+        <span class="mono" style="font-size:12px;color:var(--accent);min-width:44px;text-align:right">${r.plays.toLocaleString('fr-FR')}</span>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0" onclick="event.stopPropagation()">${actions}</div>
+    </div>`;
+  }).join('') + (total > limit ? `<div style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${total - limit} autre(s) — augmente la limite d’affichage</div>` : '');
+}
+
+function topsAddToWishlist(artistSid, albumSid, plays) {
+  const artist = unsid(artistSid), album = unsid(albumSid);
+  const rym = lookupRym(artist, album) || lookupRym(cleanDiscogsArtist(artist), album);
+  addToWishlist(artist, album, rym?.year || '', 'lastfm', plays || 0, rym?.rating || 0, '');
+  renderTops();
+}
+
+function resetTopsFilters() {
+  ['tops-filter-genre', 'tops-filter-ymin', 'tops-filter-ymax', 'tops-filter-owned', 'tops-filter-q'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+  renderTops();
+}
+
+function exportTopsCSV() {
+  const range = topsRange();
+  const cached = _topsCache[_topsType + '|' + range.key];
+  if (!cached) return;
+  const wishKeys = new Set(wishlist.map(w => normalizeKey(w.artist, w.album)));
+  const rows = [['Rang', 'Artiste', _topsType === 'artists' ? '' : 'Titre', 'Écoutes', 'Possédé', 'Genre', 'Année']];
+  cached.items.forEach((it, i) => {
+    const r = topsEnrich(_topsType, it, wishKeys);
+    rows.push([i + 1, r.artist, _topsType === 'artists' ? '' : r.name, r.plays, (_topsType === 'artists' ? r.ownedCount : !!r.owned) ? 'oui' : 'non', r.genre || '', r.year || '']);
+  });
+  download(`tops_${_topsType}_${range.key}.csv`, '﻿' + rows.map(toCSVRow).join('\n'), 'text/csv;charset=utf-8');
 }
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================

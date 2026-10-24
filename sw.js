@@ -16,7 +16,7 @@
 // ⚠️ CACHE_VERSION à incrémenter à CHAQUE déploiement (même convention manuelle que
 // APP_VERSION dans index.html) — sinon les anciens visiteurs restent bloqués sur le shell mis
 // en cache précédemment tant qu'ils n'ont pas fermé tous les onglets de l'app.
-const CACHE_VERSION = 'v2026.07.10-32';
+const CACHE_VERSION = 'v2026.10.24-01';
 const CACHE_NAME = `discotheque-shell-${CACHE_VERSION}`;
 
 const SHELL_FILES = [
