@@ -963,6 +963,8 @@ async function saveToSupabase(opts) {
       loaned_to:      a.loaned_to || null,
       loaned_since:   a.loaned_since || null,
       condition:      a.condition ? JSON.stringify(a.condition) : null,
+      location:       a.location || null,
+      added_at:       a.added_at || null,
 	  primary_folder: a.primaryFolder || 'album',
       field_provenance: a.field_provenance ? JSON.stringify(a.field_provenance) : null,
       updated_at:     now,
@@ -1220,6 +1222,8 @@ async function loadFromSupabase() {
         loaned_to:     a.loaned_to || undefined,
         loaned_since:  a.loaned_since || undefined,
         condition: (() => { try { return a.condition ? JSON.parse(a.condition) : undefined; } catch(e) { return undefined; } })(),
+        location: a.location || undefined,
+        added_at: a.added_at || undefined,
 		primaryFolder: a.primary_folder || 'album',
         field_provenance: (() => { try { return a.field_provenance ? JSON.parse(a.field_provenance) : undefined; } catch(e) { return undefined; } })(),
 		
@@ -1806,7 +1810,7 @@ function albumAvatar(album) {
 const SECTIONS = ['albums', 'discographie', 'wishlist',
   'all-tracks', 'album-tracks', 'tracks', 'track-wishlist',
   'missing', 'missing-tracks', 'rym', 'ratesession', 'artistview', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'insights', 'import',
-  'ok-albums', 'forsale', 'stock', 'tops'];
+  'ok-albums', 'forsale', 'stock', 'tops', 'retro'];
 function nav(id) {
   SECTIONS.forEach(s => {
     document.getElementById('sec-' + s).classList.toggle('active', s === id);
@@ -1821,7 +1825,7 @@ function nav(id) {
     tracks: 'Morceaux isolés', 'track-wishlist': 'Wishlist morceaux',
     missing: 'last.fm — Albums', 'missing-tracks': 'last.fm — Morceaux',
     rym: 'RateYourMusic',
-    ratesession: 'Session notation', tops: 'Tops', forsale: 'Ventes', artistview: 'Vue Artiste', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', insights: 'Insights', import: 'Import / Export'
+    ratesession: 'Session notation', tops: 'Tops', retro: 'Rétrospective', forsale: 'Ventes', artistview: 'Vue Artiste', artistlinks: 'Artistes similaires', marketvalue: 'Valeur collection', loans: 'Prêts en cours', notestoreport: 'Notes à reporter', insights: 'Insights', import: 'Import / Export'
   };
   const subs = {
     albums: 'Ma collection complète', discographie: 'CDs Discogs vs fichiers MusicBee',
@@ -1832,6 +1836,7 @@ function nav(id) {
     rym: 'Croisement collection & ratings',
     ratesession: 'Un album ou morceau non noté à la fois, ordre aléatoire (albums possédés jamais écoutés inclus)',
     tops: 'Les plus écoutés sur une période (last.fm), croisés avec ta collection',
+    retro: 'Une année d’écoute et de collection sur une page',
     forsale: 'Albums à vendre et journal des ventes',
     artistview: 'Discographie MusicBrainz complète — possédés et manquants, notes et écoutes rapatriées',
     artistlinks: 'Crédits MusicBrainz croisés avec ta collection',
@@ -1856,6 +1861,7 @@ function nav(id) {
   if (id === 'track-wishlist') renderTrackWishlist();
   if (id === 'ratesession') initRatingSession();
   if (id === 'tops') initTopsView();
+  if (id === 'retro') initRetroView();
   if (id === 'forsale') setForSaleTab(_forSaleTab);
   if (id === 'import') { renderAssocReview(); renderMissingIds(); updateNavBadges(); renderStorageStatus(); }
   if (id === 'artistview') renderArtistView();
@@ -2154,7 +2160,7 @@ const FILTER_PRESET_VIEWS = {
     renderFn: () => renderAlbums(),
     fields: ['filter-artist', 'filter-album', 'filter-support', 'filter-folder', 'filter-genre', 'filter-wishlist',
       'filter-note-op', 'filter-note-val', 'filter-dc-note-op', 'filter-dc-note-val',
-      'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'sort-col'],
+      'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'filter-location', 'sort-col'],
     noteOpPairs: [['filter-note-op', 'filter-note-val'], ['filter-dc-note-op', 'filter-dc-note-val'], ['filter-rym-note-op', 'filter-rym-note-val']]
   },
   discographie: {
@@ -2329,6 +2335,7 @@ function filteredAlbums() {
   const minPlays = parseInt(document.getElementById('filter-min-plays')?.value || '0') || 0;
   const yearF = (document.getElementById('filter-year')?.value || '').trim();
   const wf = document.getElementById('filter-wishlist')?.value || '';
+  const locF = document.getElementById('filter-location')?.value || '';
   // Correspondance EXACTE (même logique que pruneWishlistOwned/wishlistOwnedSet) — construite
   // une seule fois ici plutôt que dans le .filter() ci-dessous pour éviter de reconstruire le
   // Set à chaque album passé en revue.
@@ -2372,6 +2379,10 @@ function filteredAlbums() {
     // ── Filtre écoutes min ───────────────────────────────────────────────
     if ((a.plays || 0) < minPlays) return false;
 
+    // ── Filtre emplacement physique (v2026.10.24-04) ─────────────────────
+    if (locF === '__none' && a.location) return false;
+    if (locF && locF !== '__none' && (a.location || '') !== locF) return false;
+
     // ── Filtre wishlist ───────────────────────────────────────────────────
     // Utile notamment pour repérer les albums encore listés en wishlist alors qu'ils sont
     // déjà en collection numérique/Stock — cf. wishlistOwnedSet() : seul Discogs auto-retire
@@ -2395,6 +2406,17 @@ function sortedAlbums(list) {
   }
   if (col === 'dc') {
     return [...list].sort((a, b) => dir * ((b.discogsRating||0) - (a.discogsRating||0)));
+  }
+  if (col === 'stockage') {
+    // Ancienneté en stock : albums en Stock d'abord, du plus ancien au plus récent (▲ inverse) ;
+    // dates inconnues en fin de liste.
+    const k = a => isInStock(a) && a.added_at ? a.added_at : null;
+    return [...list].sort((a, b) => {
+      const ka = k(a), kb = k(b);
+      if (!ka && !kb) return (a.artist || '').localeCompare(b.artist || '', 'fr');
+      if (!ka) return 1; if (!kb) return -1;
+      return dir * ka.localeCompare(kb);
+    });
   }
   return [...list].sort((a, b) => {
     if (col === 'year') return dir * ((b.year||0) - (a.year||0));
@@ -2536,6 +2558,7 @@ function renderAlbums() {
   updateStats();
   updateGenreFilter();
   updateArtistFilter();
+  updateLocationFilterAndList();
 
   const list = sortedAlbums(filteredAlbums());
   const total = list.length;
@@ -2576,7 +2599,7 @@ function renderAlbums() {
       a.flac    ? '<span class="badge badge-flac">FLAC</span>' : '',
       a.mp3     ? '<span class="badge badge-mp3">MP3</span>' : '',
       a.digital ? '<span class="badge badge-digital">Digital</span>' : '',
-      isStock   ? '<span class="badge badge-stock">📦 Stock</span>' : '',
+      isStock   ? `<span class="badge badge-stock" title="${a.added_at ? 'Dans la bibliothèque depuis le ' + new Date(a.added_at + 'T12:00:00').toLocaleDateString('fr-FR') : 'Date d’ajout inconnue (réimporter le XML MusicBee)'}">${stockAgeBadge(a)}</span>` : '',
       isOk      ? '<span class="badge badge-stock" style="background:rgba(100,220,100,0.08);color:#6ddc6d;border-color:rgba(100,220,100,0.25)">✅ Ok</span>' : '',
       isForSale ? '<span class="badge badge-stock" style="background:rgba(255,192,0,0.08);color:var(--amber);border-color:rgba(255,192,0,0.25)">💸 Vendre</span>' : '',
       isWishlisted ? '<span class="badge badge-stock" title="Dans la wishlist albums" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>' : '',
@@ -2628,7 +2651,7 @@ function renderAlbums() {
           <div class="artist-avatar">${albumAvatar(a)}</div>
           <div class="artist-info">
             <div class="name">${esc(a.album)}${mbTypeBadge(a)}</div>
-            <div class="sub">${artistLink(a.artist)}${!isStock && a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
+            <div class="sub">${artistLink(a.artist)}${a.location ? ` <span style="font-size:10px;color:var(--text3);margin-left:4px" title="Emplacement">📍 ${esc(a.location)}</span>` : ''}${!isStock && a.discogsId ? ` <a href="https://www.discogs.com/release/${a.discogsId}" target="_blank" onclick="event.stopPropagation()" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none;margin-left:4px" title="Voir sur Discogs">#${a.discogsId}</a>` : ''}</div>
           </div>
         </div>
       </td>
@@ -3980,6 +4003,7 @@ function editAlbum(id) {
   document.getElementById('f-notes').value = a.notes || '';
   document.getElementById('f-loaned-to').value = a.loaned_to || '';
   document.getElementById('f-loaned-since').value = a.loaned_since || '';
+  if (document.getElementById('f-location')) { updateLocationFilterAndList(); document.getElementById('f-location').value = a.location || ''; }
   document.getElementById('f-cd').checked = !!a.cd;
   document.getElementById('f-flac').checked = !!a.flac;
   document.getElementById('f-mp3').checked = !!a.mp3;
@@ -4519,6 +4543,7 @@ function saveAlbum() {
     notes: document.getElementById('f-notes').value.trim(),
     loaned_to: document.getElementById('f-loaned-to').value.trim() || undefined,
     loaned_since: document.getElementById('f-loaned-since').value || undefined,
+    location: (document.getElementById('f-location')?.value || '').trim() || undefined,
     discogsId: document.getElementById('f-discogs-id').value.trim() || undefined,
     cover_url: document.getElementById('f-cover-url')?.value.trim() || undefined,
   };
@@ -4787,6 +4812,7 @@ async function importMusicBeeXML(input) {
       const location    = str(d, 'Location');
       const { flac, mp3 } = detectFormat(kind, location);
       const folder      = detectFolder(location);
+      const dateAdded   = dateStr(d, 'Date Added'); // v2026.10.24-04 — ancienneté (Stock qui vieillit, rétrospective)
 		
 		
 	
@@ -4875,8 +4901,11 @@ async function importMusicBeeXML(input) {
         const stockGenre = genre || '';
         if (!stockArtist && !stockAlbum) return;
         const key = normalizeKey(stockArtist, stockAlbum);
-        if (!stockAlbums.find(s => normalizeKey(s.artist, s.album) === key)) {
-          stockAlbums.push({ artist: stockArtist, album: stockAlbum, year: stockYear, genre: stockGenre, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre' });
+        const prevStock = stockAlbums.find(s => normalizeKey(s.artist, s.album) === key);
+        if (!prevStock) {
+          stockAlbums.push({ artist: stockArtist, album: stockAlbum, year: stockYear, genre: stockGenre, format: flac ? 'flac' : mp3 ? 'mp3' : 'autre', dateAdded: dateAdded || '' });
+        } else if (dateAdded && (!prevStock.dateAdded || dateAdded < prevStock.dateAdded)) {
+          prevStock.dateAdded = dateAdded;
         }
         // Les pistes stock sont collectées par importMusicBeeTracklists (tous dossiers)
       } else if (folder === 'isolated') {
@@ -4961,6 +4990,7 @@ async function importMusicBeeXML(input) {
         // Enrichir si données manquantes
         if (mbidAlbum  && !grouped[key].mbReleaseId)  grouped[key].mbReleaseId  = mbidAlbum;
         if (releaseDate && !grouped[key].releaseDate) grouped[key].releaseDate  = releaseDate;
+        if (dateAdded && (!grouped[key].dateAdded || dateAdded < grouped[key].dateAdded)) grouped[key].dateAdded = dateAdded;
         if (flac) grouped[key].flac = true;
         else if (mp3) grouped[key].mp3 = true;
         else grouped[key].digital = true;
@@ -5143,6 +5173,7 @@ async function importMusicBeeXML(input) {
 
       if (existing) {
         touchedAlbumIds.add(existing.id);
+        if (g.dateAdded) existing.added_at = g.dateAdded;
         // Mettre à jour toujours depuis XML
         if (g.year)  { existing.year  = g.year;  setProvenance(existing, 'year',  'musicbee'); }
         // Genre : respecte désormais le verrou manuel (v2026.07.12-14, demandé par Antoine) —
@@ -5216,6 +5247,7 @@ async function importMusicBeeXML(input) {
 		  primaryFolder: g.primaryFolder || 'album',
           isCompilation: g.isCompilation || false,
           mb_release_id: g.mbReleaseId || undefined,
+          added_at:      g.dateAdded || undefined,
           // compat
           cd: false, flac: fmt==='flac', mp3: fmt==='mp3', digital: fmt==='digital',
           okFolder: newFolders.includes('ok'), forSale: newFolders.includes('forsale'),
@@ -5309,6 +5341,7 @@ async function importMusicBeeXML(input) {
       if (ex) {
         if (!ex.folders) ex.folders = [];
         if (!ex.folders.includes('stock')) ex.folders.push('stock');
+        if (s.dateAdded && (!ex.added_at || s.dateAdded < ex.added_at)) ex.added_at = s.dateAdded;
         if (meta.note && !ex.note) ex.note = meta.note;
         if (meta.notes && !ex.notes) ex.notes = meta.notes;
       } else {
@@ -5319,6 +5352,7 @@ async function importMusicBeeXML(input) {
         if (dupCheck) {
           if (!dupCheck.folders) dupCheck.folders = [];
           if (!dupCheck.folders.includes('stock')) dupCheck.folders.push('stock');
+          if (s.dateAdded && (!dupCheck.added_at || s.dateAdded < dupCheck.added_at)) dupCheck.added_at = s.dateAdded;
           if (meta.note && !dupCheck.note) dupCheck.note = meta.note;
           if (meta.notes && !dupCheck.notes) dupCheck.notes = meta.notes;
           return;
@@ -5333,6 +5367,7 @@ async function importMusicBeeXML(input) {
           plays:   0, isCompilation: false,
           cd: false, flac: s.format==='flac', mp3: s.format==='mp3', digital: false,
           okFolder: false, forSale: false, primaryFolder: 'stock',
+          added_at: s.dateAdded || undefined,
         });
       }
     });
@@ -13803,16 +13838,14 @@ function renderListeningEvolution() {
     if (meta) meta.textContent = '';
     return;
   }
-  const max = Math.max(...listeningEvolution.map(d => d.plays), 1);
-  wrap.innerHTML = `<div style="display:flex;align-items:flex-end;gap:3px;height:110px">` +
-    listeningEvolution.map(d => `
-      <div style="flex:1;display:flex;align-items:flex-end;height:100%" title="${d.month} : ${d.plays.toLocaleString('fr-FR')} écoutes">
-        <div style="width:100%;background:var(--accent);border-radius:2px 2px 0 0;height:${Math.max(2, d.plays / max * 100).toFixed(1)}%"></div>
-      </div>`).join('') +
-    `</div>
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:4px">
-      <span>${listeningEvolution[0]?.month || ''}</span><span>${listeningEvolution[listeningEvolution.length - 1]?.month || ''}</span>
-    </div>`;
+  // v2026.10.24-04 : vraie courbe SVG + moyenne mobile 3 mois (au lieu de barres CSS)
+  const vals = listeningEvolution.map(d => d.plays);
+  const series = [
+    { name: 'Écoutes / mois', values: vals, area: true },
+    { name: 'Moyenne mobile 3 mois', values: movingAverage(vals, 3), dashed: true, color: 'var(--text2)' },
+  ];
+  wrap.innerHTML = svgLineChart({ series, labels: listeningEvolution.map(d => _monthShort(d.month)),
+    tip: (sr, i, v) => `${listeningEvolution[i].month} : ${Math.round(v).toLocaleString('fr-FR')} écoutes` }) + chartLegend(series);
   if (meta) meta.textContent = _listeningEvolutionComputedAt ? `Calculé ${formatProvenanceAge(_listeningEvolutionComputedAt)}` : '';
 }
 
@@ -13925,7 +13958,15 @@ function renderGenreEvolution() {
 
   if (meta) meta.textContent = `${olderMonths.size} mois plus anciens vs ${recentMonths.size} mois récents`;
   const max = Math.max(...rows.map(r => Math.max(r.older, r.recent)), 1);
-  el.innerHTML = rows.map(r => {
+  // v2026.10.24-04 : courbes mensuelles des 6 genres les plus écoutés sur la période, au-dessus
+  // de la comparaison « avant / récent » existante.
+  const totals = {};
+  genreEvolution.forEach(d => Object.entries(d.genres).forEach(([g, v]) => { totals[g] = (totals[g] || 0) + v; }));
+  const topGenres = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 6).map(e => e[0]);
+  const gSeries = topGenres.map(g => ({ name: g, values: genreEvolution.map(d => d.genres[g] || 0) }));
+  const chart = topGenres.length ? svgLineChart({ series: gSeries, labels: months.map(_monthShort), height: 190 }) + chartLegend(gSeries)
+    + '<div style="border-top:1px solid var(--border);margin:12px 0 10px"></div>' : '';
+  el.innerHTML = chart + rows.map(r => {
     const arrow = r.delta > 0 ? '▲' : r.delta < 0 ? '▼' : '·';
     const color = r.delta > 0 ? 'var(--accent)' : r.delta < 0 ? 'var(--text3)' : 'var(--text3)';
     return `<div style="margin-bottom:8px">
@@ -14380,16 +14421,14 @@ function renderMarketValueHistory() {
     return;
   }
   const fmtMoney = (v, currency) => v.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' ' + (currency === 'EUR' ? '€' : currency);
-  const max = Math.max(...marketValueHistory.map(p => p.total), 1);
-  el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:4px;height:110px">` +
-    marketValueHistory.map(p => `
-      <div style="flex:1;display:flex;align-items:flex-end;height:100%" title="${p.month} : ${fmtMoney(p.total, p.currency)} (${p.count} CD estimés)">
-        <div style="width:100%;background:var(--accent);border-radius:2px 2px 0 0;height:${Math.max(2, p.total / max * 100).toFixed(1)}%"></div>
-      </div>`).join('') +
-    `</div>
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:4px">
-      <span>${marketValueHistory[0].month}</span><span>${marketValueHistory[marketValueHistory.length - 1].month}</span>
-    </div>`;
+  // v2026.10.24-04 : courbe SVG (valeur) — le nombre de CD estimés est rappelé dans l'infobulle,
+  // une hausse pouvant venir de nouveaux CD estimés plutôt que d'une vraie hausse de cote.
+  el.innerHTML = svgLineChart({
+    series: [{ name: 'Valeur estimée', values: marketValueHistory.map(p => p.total), area: true }],
+    labels: marketValueHistory.map(p => _monthShort(p.month)),
+    fmtY: v => v.toLocaleString('fr-FR', { maximumFractionDigits: 0 }) + ' €',
+    tip: (sr, i) => `${marketValueHistory[i].month} : ${fmtMoney(marketValueHistory[i].total, marketValueHistory[i].currency)} (${marketValueHistory[i].count} CD estimés)`,
+  });
 }
 
 async function fetchAllMarketplaceStats() {
@@ -14927,7 +14966,8 @@ function rsRenderFolderInfo(a) {
   if (isOk) tags.push('ok');
   if (isForSale) tags.push('forsale');
   if (!tags.length) tags.push('album');
-  const chips = tags.map(t => `<span class="badge badge-stock">${RS_FOLDER_LABELS[t]}</span>`);
+  const chips = tags.map(t => `<span class="badge badge-stock">${t === 'stock' && a.added_at ? `📦 Stock · depuis ${fmtAge(ageDays(a.added_at))}` : RS_FOLDER_LABELS[t]}</span>`);
+  if (a.location) chips.push(`<span class="badge badge-stock">📍 ${esc(a.location)}</span>`);
   if (a.cd || a.has_cd) chips.push('<span class="badge badge-cd">💿 CD</span>');
   if (inWish) chips.push('<span class="badge badge-stock" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>');
   if (infoEl) {
@@ -16006,6 +16046,7 @@ function renderAudit() {
   renderAuditMbScores();
   renderAuditRymDivergence();
   renderAuditNotePlays();
+  renderAuditHalfListened();
   renderAuditSourceDivergences();
   renderAuditDiscogCompletion();
   const cmpBtn = document.getElementById('audit-cmp-scan-btn');
@@ -17063,6 +17104,8 @@ function initTopsView() {
       .map((m, i) => `<option value="${i + 1}">${m}</option>`).join('');
     ms.value = String(new Date().getMonth() + 1);
   }
+  const cmp = document.getElementById('tops-compare');
+  if (cmp && cmp.dataset.init !== '1') { cmp.dataset.init = '1'; try { cmp.checked = localStorage.getItem('terant_tops_compare') === '1'; } catch (e) {} }
   const gs = document.getElementById('tops-filter-genre');
   if (gs) {
     const cur = gs.value;
@@ -17154,7 +17197,7 @@ async function loadTops(force) {
   if (!_lastfmUser || !_lastfmApiKey) { el.innerHTML = '<div class="empty"><div class="empty-icon">📈</div>Configure last.fm dans Import / Export d’abord.</div>'; return; }
   const range = topsRange();
   const ck = _topsType + '|' + range.key;
-  if (!force && _topsCache[ck]) { renderTops(); return; }
+  if (!force && _topsCache[ck]) { if (topsCompareOn()) await ensureTopsPrev(); renderTops(); return; }
   if (_topsLoading) return;
   _topsLoading = true;
   const status = document.getElementById('tops-status');
@@ -17172,6 +17215,7 @@ async function loadTops(force) {
   _topsLoading = false;
   // L'utilisateur a pu changer de type/période pendant le chargement
   if (_topsType + '|' + topsRange().key !== ck) { loadTops(); return; }
+  if (topsCompareOn()) await ensureTopsPrev();
   renderTops();
 }
 
@@ -17258,6 +17302,7 @@ function renderTops() {
   const limit = parseInt(document.getElementById('tops-limit')?.value || '50', 10);
   const wishKeys = new Set(wishlist.map(w => normalizeKey(w.artist, w.album)));
   const yearApplies = _topsType !== 'artists' && (!isNaN(yMin) || !isNaN(yMax));
+  const prevRanks = topsPrevRanks();
 
   // Le rang last.fm d'origine est conservé (#), même quand les filtres masquent des entrées
   let rows = cached.items.map((it, i) => ({ ...topsEnrich(_topsType, it, wishKeys), rank: i + 1 }));
@@ -17318,7 +17363,7 @@ function renderTops() {
         ? `<button class="btn btn-sm" onclick="event.stopPropagation();topsAddToWishlist('${sid(r.artist)}','${sid(r.name)}',${r.plays})" title="Ajouter à la wishlist">🎯</button>` : '',
     ].join('');
     return `<div style="${TOPS_ROW_CSS}${openOwned ? 'cursor:pointer;' : ''}" ${openOwned ? `onclick="${openOwned}"` : ''} onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'">
-      <div style="font-family:var(--mono);font-size:13px;color:var(--text3);width:34px;text-align:right;flex-shrink:0">${r.rank}</div>
+      <div style="font-family:var(--mono);font-size:13px;color:var(--text3);width:34px;text-align:right;flex-shrink:0;line-height:1.2">${r.rank}${prevRanks ? '<br>' + rankDeltaBadge(r.rank, prevRanks.map.get(normalizeKey(r.artist, _topsType === 'artists' ? '' : r.name))) : ''}</div>
       <div class="artist-avatar" style="width:40px;height:40px">${cover}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
@@ -17331,7 +17376,19 @@ function renderTops() {
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0" onclick="event.stopPropagation()">${actions}</div>
     </div>`;
-  }).join('') + (total > limit ? `<div style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${total - limit} autre(s) — augmente la limite d’affichage</div>` : '');
+  }).join('') + (total > limit ? `<div style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${total - limit} autre(s) — augmente la limite d’affichage</div>` : '')
+    + topsDroppedHtml(prevRanks, cached);
+}
+
+// Entrées du top 20 de la période précédente absentes du top 100 actuel
+function topsDroppedHtml(prevRanks, cached) {
+  if (!prevRanks) return '';
+  const cur = new Set(cached.items.slice(0, 100).map(it => normalizeKey(it.artist, _topsType === 'artists' ? '' : it.name)));
+  const dropped = prevRanks.items.slice(0, 20).map((it, i) => ({ ...it, prev: i + 1 }))
+    .filter(it => !cur.has(normalizeKey(it.artist, _topsType === 'artists' ? '' : it.name)));
+  if (!dropped.length) return '';
+  return `<div class="card" style="margin-top:10px"><div style="font-size:12px;color:var(--text3);margin-bottom:6px">⬇️ Sortis du classement (top 20 de ${esc(prevRanks.label)}, absents du top 100 actuel)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${dropped.map(d => `<span class="badge badge-stock" title="Rang précédent : ${d.prev}">#${d.prev} ${esc(_topsType === 'artists' ? d.artist : d.name + ' — ' + d.artist)}</span>`).join('')}</div></div>`;
 }
 
 function topsAddToWishlist(artistSid, albumSid, plays) {
@@ -17478,6 +17535,8 @@ const GS_COMMANDS = [
   { icon: '📈', label: 'Tops : 30 derniers jours', kw: 'tops mois classement plus écoutés', run: () => openTopsPreset('albums', '1month') },
   { icon: '📈', label: `Tops : année ${new Date().getFullYear()}`, kw: 'tops année an classement plus écoutés', run: () => openTopsPreset('albums', 'year', new Date().getFullYear()) },
   { icon: '📈', label: `Tops : année ${new Date().getFullYear() - 1}`, kw: 'tops année an classement plus écoutés', run: () => openTopsPreset('albums', 'year', new Date().getFullYear() - 1) },
+  { icon: '🗓️', label: 'Rétrospective annuelle', kw: 'rétrospective bilan année wrapped', run: () => nav('retro') },
+  { icon: '🎧', label: 'Albums écoutés à moitié', kw: 'audit moitié pistes écouter entier', run: () => { nav('import'); switchImportTab('audit'); } },
   { icon: '🎤', label: 'Tops artistes : 12 derniers mois', kw: 'tops artistes classement', run: () => openTopsPreset('artists', '12month') },
   { icon: '🎯', label: 'Session notation', kw: 'notation noter session', run: () => nav('ratesession') },
   { icon: '📦', label: 'Session notation : Stock uniquement', kw: 'notation noter session stock', run: () => { rsFilters = { ...rsFilters, folder: 'stock' }; try { localStorage.setItem(RS_FILTERS_LS_KEY, JSON.stringify(rsFilters)); } catch (e) {} ratingSessionMode = 'albums'; nav('ratesession'); } },
@@ -17586,7 +17645,9 @@ function mosaicCard(a) {
   ].filter(Boolean).join(' ');
   const isStock = f.includes('stock') || a.primaryFolder === 'stock';
   const open = isStock ? `openStockModal('${sid(a.id)}')` : `editAlbum('${sid(a.id)}')`;
-  const meta = [a.year, a.genre].filter(Boolean).join(' · ');
+  const meta = [a.year, a.genre].filter(Boolean).join(' · ')
+    + (isStock && a.added_at ? ` · 📦 ${fmtAge(ageDays(a.added_at))}` : '')
+    + (a.location ? ` · 📍 ${a.location}` : '');
   const stats = [
     a.note ? `<span style="color:var(--accent)">${a.note.toFixed(1)}★</span>` : '',
     a.plays ? `<span>${a.plays} ▶</span>` : '',
@@ -17820,6 +17881,454 @@ function setAlbumCondition(idSid, field, value) {
   a.condition = { ...(a.condition || {}), [field]: value || undefined };
   if (!a.condition.media && !a.condition.sleeve) delete a.condition;
   saveToStorage();
+}
+
+// ===================== COURBES SVG (v2026.10.24-04) =====================
+// Remplace les barres CSS d'Insights / Valeur collection par de vraies courbes, sans librairie
+// (l'app n'en charge aucune hormis SheetJS) : SVG généré, axe Y gradué, infobulle par point
+// (<title>), aire sous la 1re série, séries supplémentaires en pointillés possibles.
+const CHART_COLORS = ['var(--accent)', 'var(--blue)', 'var(--amber)', 'var(--purple)', 'var(--red)', '#4fd1c5', '#f687b3', 'var(--text2)'];
+
+function _niceMax(v) {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+// series : [{ name, values:[number|null], color?, dashed?, area? }] ; labels : [string] (axe X)
+function svgLineChart({ series, labels, height = 170, fmtY = v => Math.round(v).toLocaleString('fr-FR'), tip }) {
+  const n = labels.length;
+  if (n < 2 || !series.length) return '';
+  const W = 640, H = height, pl = 52, pr = 12, pt = 10, pb = 24;
+  const all = series.flatMap(s => s.values.filter(v => v != null && isFinite(v)));
+  const max = _niceMax(Math.max(...all, 0));
+  const x = i => pl + (i / (n - 1)) * (W - pl - pr);
+  const y = v => pt + (1 - v / max) * (H - pt - pb);
+  let out = '';
+  for (let k = 0; k <= 4; k++) {
+    const v = max * k / 4, yy = y(v).toFixed(1);
+    out += `<line x1="${pl}" x2="${W - pr}" y1="${yy}" y2="${yy}" stroke="var(--border)" stroke-width="1" ${k ? 'stroke-dasharray="2 4"' : ''}/>`;
+    out += `<text x="${pl - 6}" y="${(+yy + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--text3)" font-family="DM Mono, monospace">${esc(fmtY(v))}</text>`;
+  }
+  const step = Math.max(1, Math.ceil(n / 8));
+  labels.forEach((l, i) => {
+    // une étiquette toutes les `step` positions + la dernière, sans chevaucher l'avant-dernière
+    if (i !== n - 1 && (i % step || (n - 1 - i) < step)) return;
+    out += `<text x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}" font-size="10" fill="var(--text3)" font-family="DM Mono, monospace">${esc(l)}</text>`;
+  });
+  series.forEach((s, si) => {
+    const color = s.color || CHART_COLORS[si % CHART_COLORS.length];
+    const pts = s.values.map((v, i) => (v == null || !isFinite(v)) ? null : [x(i), y(v), v, i]).filter(Boolean);
+    if (pts.length < 2) return;
+    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
+    if (s.area) out += `<path d="${d}L${pts[pts.length - 1][0].toFixed(1)},${y(0).toFixed(1)}L${pts[0][0].toFixed(1)},${y(0).toFixed(1)}Z" fill="${color}" opacity="0.12"/>`;
+    out += `<path d="${d}" fill="none" stroke="${color}" stroke-width="${s.dashed ? 1.5 : 2}" ${s.dashed ? 'stroke-dasharray="5 4"' : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (!s.dashed) pts.forEach(p => {
+      const t = tip ? tip(s, p[3], p[2]) : `${s.name ? s.name + ' — ' : ''}${labels[p[3]]} : ${fmtY(p[2])}`;
+      if (n <= 40) out += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${color}"/>`;
+      out += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="8" fill="transparent"><title>${esc(t)}</title></circle>`;
+    });
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;height:auto;max-height:${Math.round(H * 1.4)}px" role="img">${out}</svg>`;
+}
+
+function chartLegend(series) {
+  return `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;font-size:11px;color:var(--text2)">${series.map((s, i) =>
+    `<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:14px;height:0;border-top:2px ${s.dashed ? 'dashed' : 'solid'} ${s.color || CHART_COLORS[i % CHART_COLORS.length]}"></span>${esc(s.name)}</span>`).join('')}</div>`;
+}
+
+function movingAverage(values, k) {
+  return values.map((_, i) => {
+    if (i < k - 1) return null;
+    const win = values.slice(i - k + 1, i + 1);
+    return win.reduce((s, v) => s + v, 0) / k;
+  });
+}
+
+const _monthShort = m => { const [y, mo] = m.split('-'); return ['janv', 'févr', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'sept', 'oct', 'nov', 'déc'][+mo - 1] + ' ' + y.slice(2); };
+
+// ===================== RÉTROSPECTIVE ANNUELLE (v2026.10.24-04) =====================
+// Une année d'écoute et de collection sur une page : total de scrobbles, tops albums /
+// artistes / morceaux (mêmes appels et même cache que la vue Tops — fetchTops sur l'année
+// civile), nouveaux artistes (absents du top de l'année précédente), albums les plus écoutés
+// non possédés, et côté collection : albums ajoutés à MusicBee (added_at, nouveau champ tiré du
+// « Date Added » du XML), ventes, évolution de la valeur, entrées wishlist. Export PNG d'une
+// carte résumé (texte uniquement — les pochettes externes « tachent » le canvas).
+let _retroYear = null;
+let _retroLoading = false;
+let _retroTotals = {}; // { year: totalScrobbles }
+
+function retroYearRange(y) {
+  return { period: 'range', from: Math.floor(Date.UTC(y, 0, 1) / 1000), to: Math.floor(Date.UTC(y + 1, 0, 1) / 1000) - 1, key: 'y' + y, label: String(y) };
+}
+
+function initRetroView() {
+  const sel = document.getElementById('retro-year');
+  if (sel && !sel.options.length) {
+    const now = new Date().getFullYear();
+    let h = '';
+    for (let y = now; y >= 2002; y--) h += `<option value="${y}">${y}${y === now ? ' (en cours)' : ''}</option>`;
+    sel.innerHTML = h;
+    sel.value = String(new Date().getMonth() >= 10 ? now : now - 1); // nov./déc. → année en cours
+  }
+  loadRetro();
+}
+
+async function loadRetro(force) {
+  const y = parseInt(document.getElementById('retro-year')?.value || new Date().getFullYear() - 1, 10);
+  _retroYear = y;
+  const el = document.getElementById('retro-content');
+  if (!el) return;
+  if (!_lastfmUser || !_lastfmApiKey) { el.innerHTML = '<div class="empty">Configure last.fm dans Import / Export d’abord.</div>'; return; }
+  if (_retroLoading) return;
+  const range = retroYearRange(y), prev = retroYearRange(y - 1);
+  const need = [['albums', range], ['artists', range], ['tracks', range], ['artists', prev]]
+    .filter(([t, r]) => force || !_topsCache[t + '|' + r.key]);
+  const status = document.getElementById('retro-status');
+  if (need.length || force || _retroTotals[y] == null) {
+    _retroLoading = true;
+    el.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div>Chargement de l’année depuis last.fm…</div>';
+    try {
+      if (force || _retroTotals[y] == null) {
+        const d = await lfmGet({ method: 'user.getrecenttracks', from: range.from, to: range.to, limit: 1 });
+        _retroTotals[y] = parseInt(d.recenttracks?.['@attr']?.total, 10) || 0;
+      }
+      for (let i = 0; i < need.length; i++) {
+        const [t, r] = need[i];
+        if (status) status.textContent = `Chargement ${i + 1}/${need.length} — ${t === 'albums' ? 'albums' : t === 'artists' ? 'artistes' : 'morceaux'} ${r.label}…`;
+        const res = await fetchTops(t, r, (k, nn) => { if (status) status.textContent = `Chargement ${i + 1}/${need.length} — ${r.label}, semaine ${k}/${nn}…`; });
+        _topsCache[t + '|' + r.key] = { ...res, fetchedAt: Date.now() };
+      }
+    } catch (e) {
+      el.innerHTML = `<div class="empty"><div class="empty-icon">⚠️</div>Erreur last.fm : ${esc(e.message || String(e))}</div>`;
+      _retroLoading = false;
+      if (status) status.textContent = '';
+      return;
+    }
+    _retroLoading = false;
+    if (status) status.textContent = '';
+    if (_retroYear !== y) { loadRetro(); return; }
+  }
+  renderRetro();
+}
+
+function computeRetro(y) {
+  const range = retroYearRange(y);
+  const wishKeys = new Set(wishlist.map(w => normalizeKey(w.artist, w.album)));
+  const get = (t, key) => (_topsCache[t + '|' + key]?.items || []);
+  const albumsY = get('albums', range.key).map(it => topsEnrich('albums', it, wishKeys));
+  const artistsY = get('artists', range.key).map(it => topsEnrich('artists', it, wishKeys));
+  const tracksY = get('tracks', range.key).map(it => topsEnrich('tracks', it, wishKeys));
+  const prevArtists = new Set(get('artists', 'y' + (y - 1)).map(a => normalizeKey(a.artist, '')));
+  const newArtists = prevArtists.size ? artistsY.filter(a => !prevArtists.has(normalizeKey(a.artist, ''))) : [];
+  const inYear = iso => iso && String(iso).slice(0, 4) === String(y);
+  const added = albums.filter(a => inYear(a.added_at)).sort((a, b) => (a.added_at || '').localeCompare(b.added_at || ''));
+  const sales = salesLog.filter(s => inYear(s.soldAt));
+  const mv = marketValueHistory.filter(p => p.month.startsWith(String(y)));
+  const wishAdded = wishlist.filter(w => w.addedAt && new Date(w.addedAt).getFullYear() === y);
+  return {
+    y, total: _retroTotals[y] || 0,
+    albumsY, artistsY, tracksY, newArtists, prevKnown: prevArtists.size > 0,
+    unownedTop: albumsY.filter(a => !a.owned).slice(0, 10),
+    ownedShare: albumsY.length ? albumsY.slice(0, 50).filter(a => a.owned).length / Math.min(50, albumsY.length) : 0,
+    added, sales, salesTotal: sales.reduce((t, s) => t + (s.price || 0), 0),
+    mvStart: mv[0], mvEnd: mv[mv.length - 1], wishAdded,
+  };
+}
+
+function renderRetro() {
+  const el = document.getElementById('retro-content');
+  if (!el || _retroYear == null) return;
+  const R = computeRetro(_retroYear);
+  const fmtN = n => (n || 0).toLocaleString('fr-FR');
+  const eur = n => (n || 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+  const stat = (v, l) => `<div class="stat-card"><div class="stat-val" style="font-size:22px">${v}</div><div class="stat-label">${l}</div></div>`;
+  const cover = r => r.owned?.cover_url ? albumAvatar(r.owned) : r.image ? `<img src="${escAttr(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" onerror="this.remove()">` : initials(r.artist);
+  const topList = (rows, kind, nShow = 10) => rows.slice(0, nShow).map((r, i) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid var(--border)">
+      <span style="font-family:var(--mono);color:var(--text3);width:20px;text-align:right">${i + 1}</span>
+      ${kind !== 'artists' ? `<div class="artist-avatar" style="width:34px;height:34px">${cover(r)}</div>` : ''}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${kind === 'artists' ? artistLink(r.artist) : esc(r.name)}</div>
+        ${kind !== 'artists' ? `<div style="font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.artist)}${r.owned && !r.owned.isolated ? ' · <span style="color:var(--accent)">possédé</span>' : ''}</div>` : `<div style="font-size:11px;color:var(--text3)">${r.ownedCount ? r.ownedCount + ' album(s) possédé(s)' : 'aucun album possédé'}${r.genre ? ' · ' + esc(r.genre.split(',')[0]) : ''}</div>`}
+      </div>
+      <span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${fmtN(r.plays)}</span>
+    </div>`).join('') || '<div style="font-size:12px;color:var(--text3);padding:6px 0">Aucune donnée.</div>';
+  const card = (title, body, extra = '') => `<div class="card" style="flex:1 1 320px;min-width:280px"><h3 style="font-size:14px;margin-bottom:8px">${title}</h3>${body}${extra}</div>`;
+
+  const top1 = R.albumsY[0], topA = R.artistsY[0];
+  const hero = `<div class="card" style="margin-bottom:14px;background:linear-gradient(135deg,var(--accent-dim),var(--bg2))">
+    <div style="font-size:13px;color:var(--text2)">Ton année ${R.y} en musique</div>
+    <div style="font-size:30px;font-weight:600;margin:4px 0">${fmtN(R.total)} écoutes</div>
+    <div style="font-size:13px;color:var(--text2)">${top1 ? `Album de l’année : <strong>${esc(top1.name)}</strong> — ${esc(top1.artist)} (${fmtN(top1.plays)} écoutes)` : ''}${topA ? `<br>Artiste de l’année : <strong>${esc(topA.artist)}</strong> (${fmtN(topA.plays)} écoutes)` : ''}</div>
+  </div>`;
+  const stats = `<div class="stats-row" style="margin-bottom:14px">
+    ${stat(fmtN(R.artistsY.length) + (R.artistsY.length >= TOPS_FETCH_LIMIT ? '+' : ''), 'artistes écoutés')}
+    ${stat(fmtN(R.albumsY.length) + (R.albumsY.length >= TOPS_FETCH_LIMIT ? '+' : ''), 'albums écoutés')}
+    ${stat(R.prevKnown ? fmtN(R.newArtists.length) : '–', 'nouveaux artistes vs ' + (R.y - 1))}
+    ${stat(Math.round(R.ownedShare * 100) + ' %', 'du top 50 albums possédé')}
+    ${stat(fmtN(R.added.length), 'albums ajoutés à MusicBee')}
+  </div>`;
+  const collection = `
+    <div style="font-size:13px;line-height:1.9">
+      <div>📥 <strong>${fmtN(R.added.length)}</strong> album(s) ajouté(s) à la bibliothèque${R.added.length ? ` — ${R.added.slice(-3).reverse().map(a => esc(a.album)).join(', ')}${R.added.length > 3 ? '…' : ''}` : ''}</div>
+      <div>💰 <strong>${fmtN(R.sales.length)}</strong> vente(s)${R.sales.length ? ` — ${eur(R.salesTotal)} encaissés` : ''}</div>
+      <div>🎯 <strong>${fmtN(R.wishAdded.length)}</strong> album(s) ajouté(s) à la wishlist</div>
+      <div>📈 Valeur estimée : ${R.mvStart && R.mvEnd ? `${eur(R.mvStart.total)} (${_monthShort(R.mvStart.month)}) → <strong>${eur(R.mvEnd.total)}</strong> (${_monthShort(R.mvEnd.month)})` : '<span style="color:var(--text3)">pas d’historique cette année</span>'}</div>
+    </div>
+    ${R.added.length ? '' : '<div style="font-size:11px;color:var(--text3);margin-top:6px">Les dates d’ajout viennent du « Date Added » du XML MusicBee : réimporte le XML une fois pour les renseigner.</div>'}`;
+  el.innerHTML = hero + stats +
+    `<div style="display:flex;flex-wrap:wrap;gap:14px">
+      ${card('💿 Top albums', topList(R.albumsY, 'albums'))}
+      ${card('🎤 Top artistes', topList(R.artistsY, 'artists'))}
+      ${card('🎵 Top morceaux', topList(R.tracksY, 'tracks'))}
+      ${card('🌱 Découvertes — nouveaux artistes', R.prevKnown ? topList(R.newArtists, 'artists') : '<div style="font-size:12px;color:var(--text3)">Top de l’année précédente indisponible.</div>')}
+      ${card('🛒 Très écoutés, pas encore possédés', topList(R.unownedTop, 'albums'),
+        R.unownedTop.length ? `<button class="btn btn-sm" style="margin-top:8px" onclick="retroWishlistUnowned()">🎯 Tout ajouter à la wishlist</button>` : '')}
+      ${card('📀 Côté collection', collection)}
+    </div>`;
+}
+
+function retroWishlistUnowned() {
+  const R = computeRetro(_retroYear);
+  let n = 0;
+  R.unownedTop.forEach(r => {
+    if (wishlist.some(w => normalizeKey(w.artist, w.album) === normalizeKey(r.artist, r.name))) return;
+    const rym = lookupRym(r.artist, r.name) || lookupRym(cleanDiscogsArtist(r.artist), r.name);
+    wishlist.push({ id: uid(), artist: r.artist, album: r.name, year: rym?.year || '', source: 'lastfm', prio: 'mid', plays: r.plays || 0, rymRating: rym?.rating || 0, notes: `Rétrospective ${_retroYear}`, addedAt: Date.now() });
+    n++;
+  });
+  saveToStorage(); updateNavBadges(); renderRetro();
+  toast(`${n} album(s) ajouté(s) à la wishlist`);
+}
+
+// Carte PNG 1080×1350 (format portrait réseaux sociaux), texte uniquement
+function buildRetroSvg(R) {
+  const W = 1080, H = 1350;
+  const e = s => esc(String(s || '')).replace(/"/g, '&quot;');
+  const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  const light = currentTheme() === 'light';
+  const bg = light ? '#f4f3ef' : '#0e0e0f', fg = light ? '#1c1c22' : '#e8e8ec', muted = light ? '#85858f' : '#7a7a8a', acc = light ? '#4a7300' : '#c8f064';
+  let t = `<rect width="${W}" height="${H}" fill="${bg}"/>`;
+  t += `<text x="80" y="130" font-size="34" fill="${muted}" font-family="sans-serif">Discothèque · rétrospective</text>`;
+  t += `<text x="80" y="230" font-size="110" font-weight="700" fill="${acc}" font-family="sans-serif">${R.y}</text>`;
+  t += `<text x="80" y="310" font-size="54" font-weight="600" fill="${fg}" font-family="sans-serif">${e((R.total || 0).toLocaleString('fr-FR'))} écoutes</text>`;
+  const col = (x, title, rows, label) => {
+    let s = `<text x="${x}" y="420" font-size="32" font-weight="600" fill="${acc}" font-family="sans-serif">${e(title)}</text>`;
+    rows.slice(0, 5).forEach((r, i) => {
+      const yy = 480 + i * 92;
+      s += `<text x="${x}" y="${yy}" font-size="30" fill="${fg}" font-family="sans-serif"><tspan fill="${muted}">${i + 1}. </tspan>${e(cut(label(r)[0], 26))}</text>`;
+      s += `<text x="${x + 38}" y="${yy + 36}" font-size="24" fill="${muted}" font-family="sans-serif">${e(cut(label(r)[1], 32))}</text>`;
+    });
+    return s;
+  };
+  t += col(80, 'Albums', R.albumsY, r => [r.name, `${r.artist} · ${r.plays} écoutes`]);
+  t += col(580, 'Artistes', R.artistsY, r => [r.artist, `${r.plays} écoutes`]);
+  const facts = [
+    R.prevKnown ? `${R.newArtists.length} nouveaux artistes` : '',
+    `${R.added.length} albums ajoutés`,
+    R.sales.length ? `${R.sales.length} ventes · ${Math.round(R.salesTotal)} €` : '',
+    `${Math.round(R.ownedShare * 100)} % du top 50 possédé`,
+  ].filter(Boolean);
+  facts.forEach((f, i) => { t += `<text x="80" y="${1000 + i * 60}" font-size="34" fill="${fg}" font-family="sans-serif">• ${e(f)}</text>`; });
+  t += `<text x="80" y="${H - 60}" font-size="24" fill="${muted}" font-family="sans-serif">last.fm · ${e(_lastfmUser || '')}</text>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${t}</svg>`;
+}
+
+function exportRetroImage() {
+  if (_retroYear == null) return;
+  const svg = buildRetroSvg(computeRetro(_retroYear));
+  const img = new Image();
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = 1080; c.height = 1350;
+    c.getContext('2d').drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    c.toBlob(b => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = `retrospective-${_retroYear}.png`;
+      a.click();
+      toast('Image de la rétrospective téléchargée ✓');
+    }, 'image/png');
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); download(`retrospective-${_retroYear}.svg`, svg, 'image/svg+xml'); toast('PNG indisponible — image SVG téléchargée à la place', 'warn'); };
+  img.src = url;
+}
+
+// ===================== TOPS : COMPARAISON À LA PÉRIODE PRÉCÉDENTE (v2026.10.24-04) =====================
+// Option « Comparer » : récupère aussi la période de même durée juste avant (7 j → les 7 j
+// d'avant, année → année précédente, mois → mois précédent) et affiche l'évolution de rang
+// (↑ / ↓ / = / 🆕) + les entrées sorties du classement. Les périodes glissantes précédentes
+// passent par les charts hebdomadaires (plage libre puis repli semaine par semaine), donc
+// approximatives à la semaine près ; les périodes civiles partagent le cache de la vue Tops.
+function topsCompareOn() { return !!document.getElementById('tops-compare')?.checked; }
+
+function topsPrevRange(range) {
+  const days = { '7day': 7, '1month': 30, '3month': 90, '6month': 180, '12month': 365 }[range.period];
+  if (days) {
+    const now = Math.floor(Date.now() / 86400000) * 86400; // arrondi au jour → clé de cache stable dans la journée
+    return { period: 'range', from: now - 2 * days * 86400, to: now - days * 86400, key: `prev-${range.period}-${now}`, label: `${days} j précédents` };
+  }
+  if (range.key?.startsWith('y')) { const y = +range.key.slice(1) - 1; return retroYearRange(y); }
+  if (range.key?.startsWith('m')) {
+    const [y, m] = range.key.slice(1).split('-').map(Number);
+    const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1;
+    return { period: 'range', from: Math.floor(Date.UTC(py, pm - 1, 1) / 1000), to: Math.floor(Date.UTC(py, pm, 1) / 1000) - 1, key: `m${py}-${pm}`, label: new Date(Date.UTC(py, pm - 1, 15)).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) };
+  }
+  return null; // « depuis le début » : rien à comparer
+}
+
+async function ensureTopsPrev() {
+  if (!topsCompareOn()) return null;
+  const prev = topsPrevRange(topsRange());
+  if (!prev) return null;
+  const ck = _topsType + '|' + prev.key;
+  if (_topsCache[ck]) return _topsCache[ck];
+  const status = document.getElementById('tops-status');
+  if (status) status.textContent = `Comparaison : chargement de ${prev.label}…`;
+  try {
+    const res = await fetchTops(_topsType, prev, (i, n) => { if (status) status.textContent = `Comparaison : ${prev.label}, semaine ${i}/${n}…`; });
+    _topsCache[ck] = { ...res, fetchedAt: Date.now() };
+  } catch (e) { toast('Comparaison indisponible : ' + (e.message || e), 'warn'); return null; }
+  return _topsCache[ck];
+}
+
+function topsPrevRanks() {
+  if (!topsCompareOn()) return null;
+  const prev = topsPrevRange(topsRange());
+  const c = prev && _topsCache[_topsType + '|' + prev.key];
+  if (!c) return null;
+  const m = new Map();
+  c.items.forEach((it, i) => { const k = normalizeKey(it.artist, _topsType === 'artists' ? '' : it.name); if (!m.has(k)) m.set(k, i + 1); });
+  return { map: m, items: c.items, label: prev.label };
+}
+
+function rankDeltaBadge(rank, prevRank) {
+  if (prevRank == null) return '<span title="Absent de la période précédente" style="font-size:10px;color:var(--amber);font-weight:600">🆕</span>';
+  const d = prevRank - rank;
+  if (d > 0) return `<span title="Rang précédent : ${prevRank}" style="font-family:var(--mono);font-size:10px;color:var(--accent)">▲${d}</span>`;
+  if (d < 0) return `<span title="Rang précédent : ${prevRank}" style="font-family:var(--mono);font-size:10px;color:var(--red)">▼${-d}</span>`;
+  return `<span title="Même rang" style="font-family:var(--mono);font-size:10px;color:var(--text3)">=</span>`;
+}
+
+function onTopsCompareChange() {
+  try { localStorage.setItem('terant_tops_compare', topsCompareOn() ? '1' : ''); } catch (e) {}
+  ensureTopsPrev().then(() => renderTops());
+}
+
+// ===================== ALBUMS ÉCOUTÉS À MOITIÉ (v2026.10.24-04) =====================
+// Croise la tracklist MusicBee d'un album possédé avec les écoutes last.fm par morceau
+// (_lastfmTrackCounts, tous albums confondus pour tolérer les variations de tag album) : un
+// album écouté (≥ 5 écoutes) dont la moitié des pistes ou moins a déjà été scrobblée est
+// probablement connu par ses singles seulement — à écouter en entier avant de le noter.
+const HALF_MIN_TRACKS = 4, HALF_MIN_PLAYS = 5, HALF_MAX_RATIO = 0.5;
+
+function computeHalfListened() {
+  if (_cache.halfListened) return _cache.halfListened;
+  const lf = getLfExactMap();
+  if (!lf.size) return (_cache.halfListened = []);
+  const heard = (artists, title) => {
+    const tn = normalizeKey('', title).replace('|||', '');
+    for (const ar of artists) for (const av of artistVariants(ar)) if ((lf.get(av + '|||' + tn) || 0) > 0) return true;
+    return false;
+  };
+  const rows = [];
+  ownedAlbumsForCovers().forEach(a => {
+    if ((a.plays || 0) < HALF_MIN_PLAYS) return;
+    const tl = (albumTracksCache[a.id] || []).filter(t => t.source === 'musicbee' && t.title);
+    const uniq = [...new Map(tl.map(t => [normalizeKey('', t.title), t])).values()];
+    if (uniq.length < HALF_MIN_TRACKS) return;
+    const unheard = uniq.filter(t => !heard([a.artist, t.trackArtist].filter(Boolean), t.title));
+    const ratio = (uniq.length - unheard.length) / uniq.length;
+    if (ratio <= HALF_MAX_RATIO) rows.push({ a, total: uniq.length, heard: uniq.length - unheard.length, ratio, unheard: unheard.map(t => t.title) });
+  });
+  rows.sort((x, y) => x.ratio - y.ratio || (y.a.plays || 0) - (x.a.plays || 0));
+  return (_cache.halfListened = rows);
+}
+
+function renderAuditHalfListened() {
+  const el = document.getElementById('audit-half-list');
+  if (!el) return;
+  const rows = computeHalfListened();
+  const ctr = document.getElementById('audit-half-counter');
+  if (ctr) ctr.textContent = Object.keys(_lastfmTrackCounts || {}).length
+    ? `${rows.length} album(s) écoutés ≥ ${HALF_MIN_PLAYS} fois dont ≤ ${Math.round(HALF_MAX_RATIO * 100)} % des pistes ont été scrobblées`
+    : 'Écoutes par morceau non chargées — lance « 🎵 Sync morceaux » dans Import / Export.';
+  el.innerHTML = rows.slice(0, 100).map(r => `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="editAlbum('${sid(r.a.id)}')" title="Jamais scrobblées : ${escAttr(r.unheard.slice(0, 10).join(' · '))}${r.unheard.length > 10 ? ' …' : ''}">
+      <div style="min-width:0"><div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.a.album)}</div><div style="font-size:11px;color:var(--text3)">${esc(r.a.artist)} · ${(r.a.plays || 0).toLocaleString('fr-FR')} écoutes</div></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <div style="width:60px;height:5px;background:var(--bg4);border-radius:3px;overflow:hidden"><div style="height:100%;width:${Math.round(r.ratio * 100)}%;background:var(--amber)"></div></div>
+        <span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${r.heard}/${r.total}</span>
+        <button class="btn btn-xs" onclick="event.stopPropagation();openYouTubeMusicForAlbumId('${sid(r.a.id)}')" title="Écouter l'album en entier">▶️</button>
+      </div>
+    </div>`).join('') || '<div class="empty" style="padding:16px"><div class="empty-icon">✅</div>Aucun album écouté à moitié.</div>';
+}
+
+// ===================== EMPLACEMENT PHYSIQUE (v2026.10.24-04) =====================
+// a.location (texte libre : « Étagère 3 », « Boîte jazz »…) pour retrouver un CD. Saisi dans la
+// fiche album (avec suggestions des emplacements existants), en masse depuis la sélection
+// multiple (« 📍 Ranger… »), filtrable en Collection, affiché sur les lignes et la mosaïque.
+// Persisté via une colonne `location` (IndexedDB : aucune migration).
+function locationsList() {
+  return [...new Set(albums.map(a => (a.location || '').trim()).filter(Boolean))].sort((x, y) => x.localeCompare(y, 'fr', { numeric: true }));
+}
+
+function updateLocationFilterAndList() {
+  const locs = locationsList();
+  const sel = document.getElementById('filter-location');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">📍 Tous emplacements</option><option value="__none">Sans emplacement</option>' +
+      locs.map(l => `<option value="${escAttr(l)}" ${l === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    if (cur === '__none') sel.value = '__none';
+    sel.style.display = locs.length ? '' : 'none';
+  }
+  const dl = document.getElementById('location-list');
+  if (dl) dl.innerHTML = locs.map(l => `<option value="${escAttr(l)}">`).join('');
+}
+
+function bulkSetLocation() {
+  if (!selectedAlbumIds.size) return;
+  updateLocationFilterAndList();
+  const raw = prompt(`Emplacement pour ${selectedAlbumIds.size} album(s) (vide = retirer l'emplacement) :\n\nExistants : ${locationsList().join(', ') || '—'}`, '');
+  if (raw === null) return;
+  const loc = raw.trim();
+  const before = [];
+  selectedAlbumIds.forEach(id => {
+    const a = albums.find(x => x.id === id || x.id === String(id));
+    if (!a) return;
+    before.push([a, a.location]);
+    if (loc) a.location = loc; else delete a.location;
+  });
+  saveToStorage(); renderAlbums(); renderDiscographie(); clearAlbumSelection();
+  toastUndo(`${before.length} album(s) ${loc ? 'rangé(s) dans « ' + loc + ' »' : 'sans emplacement'}`, () => {
+    before.forEach(([a, l]) => { if (l) a.location = l; else delete a.location; });
+    saveToStorage(); renderAlbums(); renderDiscographie();
+  });
+}
+
+// ===================== STOCK QUI VIEILLIT (v2026.10.24-04) =====================
+// a.added_at = plus ancien « Date Added » des pistes de l'album dans le XML MusicBee (rempli au
+// prochain réimport XML). Pour un album en Stock, c'est la date d'arrivée dans la bibliothèque →
+// ancienneté affichée sur le badge 📦, tri « Ancienneté en stock » en Collection, et rappel dans
+// la Session notation.
+function ageDays(iso) { return iso ? Math.floor((Date.now() - new Date(iso + (iso.length === 10 ? 'T12:00:00' : '')).getTime()) / 86400000) : null; }
+function fmtAge(days) {
+  if (days == null) return '';
+  if (days < 14) return days + ' j';
+  if (days < 61) return Math.round(days / 7) + ' sem.';
+  if (days < 730) return Math.round(days / 30.4) + ' mois';
+  return (days / 365.25).toFixed(1).replace('.', ',').replace(',0', '') + ' ans';
+}
+function isInStock(a) { return (a.folders || []).includes('stock') || a.primaryFolder === 'stock'; }
+function stockAgeBadge(a) {
+  const d = ageDays(a.added_at);
+  if (d == null) return '📦 Stock';
+  return `📦 Stock · ${fmtAge(d)}`;
 }
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
