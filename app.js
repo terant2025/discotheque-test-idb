@@ -964,6 +964,7 @@ async function saveToSupabase(opts) {
       loaned_since:   a.loaned_since || null,
       condition:      a.condition ? JSON.stringify(a.condition) : null,
       location:       a.location || null,
+      tags:           a.tags?.length ? JSON.stringify(a.tags) : null,
       added_at:       a.added_at || null,
 	  primary_folder: a.primaryFolder || 'album',
       field_provenance: a.field_provenance ? JSON.stringify(a.field_provenance) : null,
@@ -1223,6 +1224,7 @@ async function loadFromSupabase() {
         loaned_since:  a.loaned_since || undefined,
         condition: (() => { try { return a.condition ? JSON.parse(a.condition) : undefined; } catch(e) { return undefined; } })(),
         location: a.location || undefined,
+        tags: (() => { try { return a.tags ? JSON.parse(a.tags) : undefined; } catch(e) { return undefined; } })(),
         added_at: a.added_at || undefined,
 		primaryFolder: a.primary_folder || 'album',
         field_provenance: (() => { try { return a.field_provenance ? JSON.parse(a.field_provenance) : undefined; } catch(e) { return undefined; } })(),
@@ -1812,6 +1814,7 @@ const SECTIONS = ['albums', 'discographie', 'wishlist',
   'missing', 'missing-tracks', 'rym', 'ratesession', 'artistview', 'artistlinks', 'marketvalue', 'loans', 'notestoreport', 'insights', 'import',
   'ok-albums', 'forsale', 'stock', 'tops', 'retro'];
 function nav(id) {
+  if (document.body.classList.contains('sidebar-open')) toggleSidebar(false);
   SECTIONS.forEach(s => {
     document.getElementById('sec-' + s).classList.toggle('active', s === id);
     document.querySelectorAll('.nav-item').forEach(el => {
@@ -2160,7 +2163,7 @@ const FILTER_PRESET_VIEWS = {
     renderFn: () => renderAlbums(),
     fields: ['filter-artist', 'filter-album', 'filter-support', 'filter-folder', 'filter-genre', 'filter-wishlist',
       'filter-note-op', 'filter-note-val', 'filter-dc-note-op', 'filter-dc-note-val',
-      'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'filter-location', 'sort-col'],
+      'filter-rym-note-op', 'filter-rym-note-val', 'filter-year', 'filter-min-plays', 'filter-location', 'filter-tag', 'sort-col'],
     noteOpPairs: [['filter-note-op', 'filter-note-val'], ['filter-dc-note-op', 'filter-dc-note-val'], ['filter-rym-note-op', 'filter-rym-note-val']]
   },
   discographie: {
@@ -2336,6 +2339,7 @@ function filteredAlbums() {
   const yearF = (document.getElementById('filter-year')?.value || '').trim();
   const wf = document.getElementById('filter-wishlist')?.value || '';
   const locF = document.getElementById('filter-location')?.value || '';
+  const tagF = document.getElementById('filter-tag')?.value || '';
   // Correspondance EXACTE (même logique que pruneWishlistOwned/wishlistOwnedSet) — construite
   // une seule fois ici plutôt que dans le .filter() ci-dessous pour éviter de reconstruire le
   // Set à chaque album passé en revue.
@@ -2382,6 +2386,9 @@ function filteredAlbums() {
     // ── Filtre emplacement physique (v2026.10.24-04) ─────────────────────
     if (locF === '__none' && a.location) return false;
     if (locF && locF !== '__none' && (a.location || '') !== locF) return false;
+    // ── Filtre étiquette (v2026.10.24-05) ────────────────────────────────
+    if (tagF === '__none' && a.tags?.length) return false;
+    if (tagF && tagF !== '__none' && !(a.tags || []).includes(tagF)) return false;
 
     // ── Filtre wishlist ───────────────────────────────────────────────────
     // Utile notamment pour repérer les albums encore listés en wishlist alors qu'ils sont
@@ -2559,6 +2566,7 @@ function renderAlbums() {
   updateGenreFilter();
   updateArtistFilter();
   updateLocationFilterAndList();
+  updateTagFilter();
 
   const list = sortedAlbums(filteredAlbums());
   const total = list.length;
@@ -2603,6 +2611,7 @@ function renderAlbums() {
       isOk      ? '<span class="badge badge-stock" style="background:rgba(100,220,100,0.08);color:#6ddc6d;border-color:rgba(100,220,100,0.25)">✅ Ok</span>' : '',
       isForSale ? '<span class="badge badge-stock" style="background:rgba(255,192,0,0.08);color:var(--amber);border-color:rgba(255,192,0,0.25)">💸 Vendre</span>' : '',
       isWishlisted ? '<span class="badge badge-stock" title="Dans la wishlist albums" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>' : '',
+      tagChips(a, true),
     ].filter(Boolean).join('');
 
     const noteCell = `<span onclick="event.stopPropagation();promptStockRating('${sid(a.id)}')" title="Modifier la note MusicBee" style="cursor:pointer;display:inline-flex;align-items:center">
@@ -3993,6 +4002,7 @@ function editAlbum(id) {
   const realId = unsid(id);
   const a = albums.find(x => x.id === realId || x.id === String(realId));
   if (!a) return;
+  _albumNav = albumNavFromActiveView(); // v2026.10.24-05 — navigation ‹ › dans la liste affichée
   document.getElementById('edit-id').value = realId;
   document.getElementById('modal-album-title').textContent = 'Modifier l\'album';
   document.getElementById('f-artist').value = a.artist;
@@ -4004,6 +4014,7 @@ function editAlbum(id) {
   document.getElementById('f-loaned-to').value = a.loaned_to || '';
   document.getElementById('f-loaned-since').value = a.loaned_since || '';
   if (document.getElementById('f-location')) { updateLocationFilterAndList(); document.getElementById('f-location').value = a.location || ''; }
+  if (document.getElementById('f-tags')) { document.getElementById('f-tags').value = (a.tags || []).join(', '); renderTagSuggestions(); }
   document.getElementById('f-cd').checked = !!a.cd;
   document.getElementById('f-flac').checked = !!a.flac;
   document.getElementById('f-mp3').checked = !!a.mp3;
@@ -4026,6 +4037,8 @@ function editAlbum(id) {
   if (missingDiscogEl) missingDiscogEl.innerHTML = '';
   _missingDiscogList = [];
   document.getElementById('modal-album').classList.add('open');
+  renderAlbumNavBar(realId);
+  _albumFormSnap = albumFormSnapshot();
 }
 
 // ===================== AUTO COVERS =====================
@@ -4544,6 +4557,7 @@ function saveAlbum() {
     loaned_to: document.getElementById('f-loaned-to').value.trim() || undefined,
     loaned_since: document.getElementById('f-loaned-since').value || undefined,
     location: (document.getElementById('f-location')?.value || '').trim() || undefined,
+    tags: (() => { const t = parseTagsInput(document.getElementById('f-tags')?.value || ''); return t.length ? t : undefined; })(),
     discogsId: document.getElementById('f-discogs-id').value.trim() || undefined,
     cover_url: document.getElementById('f-cover-url')?.value.trim() || undefined,
   };
@@ -11201,6 +11215,7 @@ function exportOfflineAndroid() {
     plays: a.plays || 0,
     label: a.label || '', catno: a.catno || '',
     isCompilation: !!a.isCompilation,
+    tags: a.tags || [],
     kind: 'owned',
     // Prix Discogs (demandé par Antoine) : prix le plus bas uniquement — médiane/plus haut
     // non disponibles via l'API Discogs officielle documentée (seul /marketplace/stats est
@@ -11336,6 +11351,7 @@ function buildOfflineHtml(list) {
     "    if(a.noteRYM) badges.push('<span class=\"badge\">RYM '+a.noteRYM+'</span>');",
     "    if(a.noteDiscogs) badges.push('<span class=\"badge\">Discogs '+a.noteDiscogs+'</span>');",
     "    if(a.price!=null) badges.push('<span class=\"badge\" style=\"color:var(--accent);border-color:var(--accent)\">'+(a.priceApprox?'≈ ':'')+'💰 '+Number(a.price).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(a.priceCurrency==='EUR'?'€':(a.priceCurrency||''))+'</span>');",
+    "    (a.tags||[]).forEach(function(t){ badges.push('<span class=\"badge\">🏷 '+esc(t)+'</span>'); });",
     "    if(a.target!=null) badges.push('<span class=\"badge\"'+(a.deal?' style=\"color:#ffc060;border-color:#ffc060;font-weight:600\"':'')+'>'+(a.deal?'🔥 ':'')+'cible ≤ '+Number(a.target).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €</span>');",
     "    if(a.plays) badges.push('<span class=\"badge\">'+a.plays.toLocaleString('fr-FR')+' écoutes</span>');",
     "    const cls=a.kind==='discover'?' oc':a.kind==='wishlist'?' wish':'';",
@@ -14968,6 +14984,7 @@ function rsRenderFolderInfo(a) {
   if (!tags.length) tags.push('album');
   const chips = tags.map(t => `<span class="badge badge-stock">${t === 'stock' && a.added_at ? `📦 Stock · depuis ${fmtAge(ageDays(a.added_at))}` : RS_FOLDER_LABELS[t]}</span>`);
   if (a.location) chips.push(`<span class="badge badge-stock">📍 ${esc(a.location)}</span>`);
+  if (a.tags?.length) chips.push(tagChips(a));
   if (a.cd || a.has_cd) chips.push('<span class="badge badge-cd">💿 CD</span>');
   if (inWish) chips.push('<span class="badge badge-stock" style="background:rgba(255,105,180,0.08);color:#ff8ecb;border-color:rgba(255,105,180,0.25)">🎯 Wishlist</span>');
   if (infoEl) {
@@ -17082,7 +17099,8 @@ let _topsType = 'albums'; // 'albums' | 'artists' | 'tracks'
 
 function setTopsType(t) {
   _topsType = t;
-  ['albums', 'artists', 'tracks'].forEach(k => document.getElementById('tops-type-btn-' + k)?.classList.toggle('active', k === t));
+  ['albums', 'artists', 'tracks', 'rediscover'].forEach(k => document.getElementById('tops-type-btn-' + k)?.classList.toggle('active', k === t));
+  ['tops-filter-owned', 'tops-compare-wrap'].forEach(id => { const e = document.getElementById(id); if (e) e.style.display = t === 'rediscover' ? 'none' : ''; });
   const yr = document.getElementById('tops-year-filters');
   if (yr) yr.style.opacity = t === 'artists' ? '0.4' : '1';
   loadTops();
@@ -17192,6 +17210,7 @@ async function fetchTops(type, range, onProgress) {
 }
 
 async function loadTops(force) {
+  if (_topsType === 'rediscover') return loadRediscover(force);
   const el = document.getElementById('tops-list');
   if (!el) return;
   if (!_lastfmUser || !_lastfmApiKey) { el.innerHTML = '<div class="empty"><div class="empty-icon">📈</div>Configure last.fm dans Import / Export d’abord.</div>'; return; }
@@ -17289,6 +17308,7 @@ function topsEnrich(type, it, wishKeys) {
 }
 
 function renderTops() {
+  if (_topsType === 'rediscover') { renderRediscover(); return; }
   const el = document.getElementById('tops-list');
   if (!el) return;
   const range = topsRange();
@@ -17404,6 +17424,14 @@ function resetTopsFilters() {
 }
 
 function exportTopsCSV() {
+  if (_topsType === 'rediscover') {
+    const R = computeRediscover(rediscoverPeriod());
+    if (!R) return;
+    const rows = [['Artiste', 'Album', 'Année', 'Genre', 'Note perso', 'Note RYM', 'Écoutes totales']];
+    R.rows.forEach(({ a, rym }) => rows.push([a.artist, a.album, originalYearOf(a) || '', a.genre || '', a.note || '', rym || '', a.plays || 0]));
+    download(`a_redecouvrir_${rediscoverPeriod()}.csv`, '\uFEFF' + rows.map(toCSVRow).join('\n'), 'text/csv;charset=utf-8');
+    return;
+  }
   const range = topsRange();
   const cached = _topsCache[_topsType + '|' + range.key];
   if (!cached) return;
@@ -17535,6 +17563,7 @@ const GS_COMMANDS = [
   { icon: '📈', label: 'Tops : 30 derniers jours', kw: 'tops mois classement plus écoutés', run: () => openTopsPreset('albums', '1month') },
   { icon: '📈', label: `Tops : année ${new Date().getFullYear()}`, kw: 'tops année an classement plus écoutés', run: () => openTopsPreset('albums', 'year', new Date().getFullYear()) },
   { icon: '📈', label: `Tops : année ${new Date().getFullYear() - 1}`, kw: 'tops année an classement plus écoutés', run: () => openTopsPreset('albums', 'year', new Date().getFullYear() - 1) },
+  { icon: '🔁', label: 'À redécouvrir', kw: 'redécouvrir réécouter oubliés favoris', run: () => { nav('tops'); setTopsType('rediscover'); } },
   { icon: '🗓️', label: 'Rétrospective annuelle', kw: 'rétrospective bilan année wrapped', run: () => nav('retro') },
   { icon: '🎧', label: 'Albums écoutés à moitié', kw: 'audit moitié pistes écouter entier', run: () => { nav('import'); switchImportTab('audit'); } },
   { icon: '🎤', label: 'Tops artistes : 12 derniers mois', kw: 'tops artistes classement', run: () => openTopsPreset('artists', '12month') },
@@ -17658,6 +17687,7 @@ function mosaicCard(a) {
     <div class="name" title="${escAttr(a.album)}">${esc(a.album)}</div>
     <div class="sub" title="${escAttr(a.artist)}">${esc(a.artist)}</div>
     ${meta ? `<div class="sub" style="opacity:0.75">${esc(meta)}</div>` : ''}
+    ${a.tags?.length ? `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px">${tagChips(a, true)}</div>` : ''}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:4px">
       <span style="font-family:var(--mono);font-size:11px;color:var(--text3)">${stats}</span>
       <span style="display:flex;gap:3px" onclick="event.stopPropagation()">
@@ -18330,6 +18360,264 @@ function stockAgeBadge(a) {
   if (d == null) return '📦 Stock';
   return `📦 Stock · ${fmtAge(d)}`;
 }
+
+// ===================== 🔁 À REDÉCOUVRIR (v2026.10.24-05) =====================
+// 4e onglet de la vue Tops : albums POSSÉDÉS et appréciés (note perso ≥ 4★, ou sans note perso
+// mais RYM ≥ 3,8) qui n'apparaissent PAS dans les albums écoutés sur last.fm pendant la période
+// choisie (3, 6 ou 12 derniers mois). Pas besoin de « date de dernière écoute » par album :
+// l'ensemble des albums écoutés sur la période suffit (user.gettopalbums, 1 000 par page, jusqu'à
+// 5 pages), donc quelques appels au lieu de rejouer tout l'historique des scrobbles.
+const REDISCOVER_PERIODS = ['3month', '6month', '12month'];
+const REDISCOVER_MIN_NOTE = 4, REDISCOVER_MIN_RYM = 3.8, REDISCOVER_MIN_PLAYS = 3;
+
+function rediscoverPeriod() {
+  const p = document.getElementById('tops-period')?.value || '12month';
+  return REDISCOVER_PERIODS.includes(p) ? p : '12month';
+}
+
+async function fetchAllTopAlbums(period, onProgress) {
+  const all = [];
+  for (let page = 1; page <= 5; page++) {
+    const d = await lfmGet({ method: 'user.gettopalbums', period, limit: 1000, page });
+    const items = _topsNormalize('albums', d.topalbums?.album);
+    all.push(...items);
+    const totalPages = parseInt(d.topalbums?.['@attr']?.totalPages, 10) || 1;
+    if (onProgress) onProgress(page, Math.min(totalPages, 5));
+    if (page >= totalPages || !items.length) break;
+  }
+  return all;
+}
+
+async function loadRediscover(force) {
+  const el = document.getElementById('tops-list');
+  if (!el) return;
+  const period = rediscoverPeriod();
+  const ck = 'rediscover|' + period;
+  if (!force && _topsCache[ck]) { renderRediscover(); return; }
+  if (_topsLoading) return;
+  _topsLoading = true;
+  const status = document.getElementById('tops-status');
+  el.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div>Chargement des albums écoutés récemment…</div>';
+  try {
+    const items = await fetchAllTopAlbums(period, (p, n) => { if (status) status.textContent = `Albums écoutés sur la période : page ${p}/${n}…`; });
+    _topsCache[ck] = { items, fetchedAt: Date.now(), source: 'top' };
+  } catch (e) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">⚠️</div>Erreur last.fm : ${esc(e.message || String(e))}</div>`;
+    _topsLoading = false;
+    return;
+  }
+  _topsLoading = false;
+  if (_topsType === 'rediscover') renderRediscover();
+}
+
+function computeRediscover(period) {
+  const cached = _topsCache['rediscover|' + period];
+  if (!cached) return null;
+  const idx = topsIndexes();
+  const recent = new Set();
+  cached.items.forEach(it => { const a = _topsLookup(idx.albumByKey, it.artist, it.name); if (a) recent.add(a.id); });
+  const rows = [];
+  ownedAlbumsForCovers().forEach(a => {
+    if (recent.has(a.id) || (a.plays || 0) < REDISCOVER_MIN_PLAYS) return;
+    const rym = lookupRym(a.artist, a.album, a.id) || lookupRym(cleanDiscogsArtist(a.artist), a.album, a.id);
+    const liked = (a.note || 0) >= REDISCOVER_MIN_NOTE || (!a.note && (rym?.rating || 0) >= REDISCOVER_MIN_RYM);
+    if (!liked) return;
+    rows.push({ a, rym: rym?.rating || 0, score: (a.note || rym?.rating || 0) });
+  });
+  rows.sort((x, y) => y.score - x.score || (y.a.plays || 0) - (x.a.plays || 0));
+  return { rows, recentCount: cached.items.length, fetchedAt: cached.fetchedAt };
+}
+
+function renderRediscover() {
+  const el = document.getElementById('tops-list');
+  if (!el) return;
+  const period = rediscoverPeriod();
+  const R = computeRediscover(period);
+  if (!R) { loadRediscover(); return; }
+  const label = { '3month': '3 mois', '6month': '6 mois', '12month': '12 mois' }[period];
+  const genreF = (document.getElementById('tops-filter-genre')?.value || '').toLowerCase();
+  const yMin = parseInt(document.getElementById('tops-filter-ymin')?.value || '', 10);
+  const yMax = parseInt(document.getElementById('tops-filter-ymax')?.value || '', 10);
+  const q = (document.getElementById('tops-filter-q')?.value || '').toLowerCase().trim();
+  const limit = parseInt(document.getElementById('tops-limit')?.value || '50', 10);
+  const rows = R.rows.filter(({ a }) => {
+    if (q && !(a.artist + ' ' + a.album).toLowerCase().includes(q)) return false;
+    if (genreF && !(a.genre || '').toLowerCase().includes(genreF)) return false;
+    const y = originalYearOf(a);
+    if (!isNaN(yMin) && !(y >= yMin)) return false;
+    if (!isNaN(yMax) && !(y <= yMax)) return false;
+    return true;
+  });
+  const status = document.getElementById('tops-status');
+  const sel = document.getElementById('tops-period');
+  if (status) status.textContent = `${rows.length} album(s) possédé(s) noté(s) ≥ ${REDISCOVER_MIN_NOTE}★ (ou RYM ≥ ${REDISCOVER_MIN_RYM}) et pas écoutés depuis ${label}`
+    + ` · ${R.recentCount.toLocaleString('fr-FR')} albums écoutés sur la période`
+    + (sel && !REDISCOVER_PERIODS.includes(sel.value) ? ' · période ramenée à 12 mois (choisir 3, 6 ou 12 mois)' : '');
+  if (!rows.length) { el.innerHTML = '<div class="empty"><div class="empty-icon">✅</div>Rien à redécouvrir : tous tes albums préférés ont été écoutés récemment.</div>'; return; }
+  el.innerHTML = rows.slice(0, limit).map(({ a, rym }) => `
+    <div style="${TOPS_ROW_CSS}cursor:pointer" onclick="editAlbum('${sid(a.id)}')" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div class="artist-avatar" style="width:40px;height:40px">${albumAvatar(a)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album)}</div>
+        <div style="font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${artistLink(a.artist)} <span style="color:var(--text3)">· ${[originalYearOf(a) || '', (a.genre || '').split(/[;,]/)[0]].filter(Boolean).map(esc).join(' · ')}</span></div>
+        <div style="display:flex;gap:6px;margin-top:3px;align-items:center;font-family:var(--mono);font-size:11px;color:var(--text3)">
+          ${a.note ? `<span style="color:var(--accent)">${a.note.toFixed(1)}★</span>` : ''}${rym ? `<span style="color:var(--amber)">RYM ${rym.toFixed(2)}</span>` : ''}
+          <span>${(a.plays || 0).toLocaleString('fr-FR')} écoutes au total</span>
+          ${(a.cd || a.has_cd) ? '<span class="badge badge-cd">CD</span>' : ''}${(a.tags || []).map(t => `<span class="badge badge-stock">🏷 ${esc(t)}</span>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0" onclick="event.stopPropagation()">
+        <button class="btn btn-sm" onclick="openYouTubeMusicForAlbumId('${sid(a.id)}')" title="Écouter sur YouTube Music">▶️</button>
+        ${searchMenuBtn(a.artist, a.album)}
+      </div>
+    </div>`).join('') + (rows.length > limit ? `<div style="text-align:center;color:var(--text3);font-size:12px;padding:10px">… ${rows.length - limit} autre(s)</div>` : '');
+}
+
+// ===================== 🏷️ ÉTIQUETTES PERSO (v2026.10.24-05) =====================
+// a.tags = ['à faire écouter', 'soirée', 'à ripper'…] : listes libres, sans hiérarchie. Saisie
+// dans la fiche album (séparées par des virgules, étiquettes existantes cliquables), étiquetage
+// en masse depuis la sélection multiple (« tag » ajoute, « -tag » retire), filtre en Collection,
+// affichage sur les lignes, la mosaïque, la Session notation et l'export hors ligne.
+// Persisté via une colonne JSON `tags` (IndexedDB : aucune migration).
+function normalizeTags(arr) {
+  const seen = new Map();
+  (arr || []).forEach(t => { const v = String(t || '').trim().replace(/\s+/g, ' '); if (v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v); });
+  return [...seen.values()];
+}
+function parseTagsInput(s) { return normalizeTags(String(s || '').split(',')); }
+
+function tagsWithCounts() {
+  const m = new Map();
+  albums.forEach(a => (a.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+  return [...m.entries()].sort((x, y) => x[0].localeCompare(y[0], 'fr'));
+}
+
+function tagChips(a, small) {
+  return (a.tags || []).map(t => `<span class="badge badge-stock" style="${small ? 'font-size:9px;' : ''}color:var(--blue);border-color:rgba(96,184,255,0.3)">🏷 ${esc(t)}</span>`).join('');
+}
+
+function updateTagFilter() {
+  const sel = document.getElementById('filter-tag');
+  if (!sel) return;
+  const tags = tagsWithCounts();
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">🏷 Toutes étiquettes</option><option value="__none">Sans étiquette</option>' +
+    tags.map(([t, n]) => `<option value="${escAttr(t)}" ${t === cur ? 'selected' : ''}>${esc(t)} (${n})</option>`).join('');
+  if (cur === '__none') sel.value = '__none';
+  sel.style.display = tags.length ? '' : 'none';
+}
+
+function renderTagSuggestions() {
+  const box = document.getElementById('f-tags-suggest');
+  const inp = document.getElementById('f-tags');
+  if (!box || !inp) return;
+  const current = new Set(parseTagsInput(inp.value).map(t => t.toLowerCase()));
+  box.innerHTML = tagsWithCounts().filter(([t]) => !current.has(t.toLowerCase())).slice(0, 30)
+    .map(([t]) => `<button type="button" class="btn btn-xs" onclick="addTagToInput(unsid('${sid(t)}'))">+ ${esc(t)}</button>`).join('');
+}
+function addTagToInput(t) {
+  const inp = document.getElementById('f-tags');
+  if (!inp) return;
+  inp.value = parseTagsInput(inp.value).concat(t).join(', ');
+  renderTagSuggestions();
+}
+
+function bulkTag() {
+  if (!selectedAlbumIds.size) return;
+  const existing = tagsWithCounts().map(e => e[0]).join(', ') || '—';
+  const raw = prompt(`Étiquette pour ${selectedAlbumIds.size} album(s) :\n• « nom » pour l'ajouter\n• « -nom » pour la retirer\n\nExistantes : ${existing}`, '');
+  if (raw === null || !raw.trim()) return;
+  const remove = raw.trim().startsWith('-');
+  const tag = raw.trim().replace(/^-\s*/, '');
+  if (!tag) return;
+  const before = [];
+  selectedAlbumIds.forEach(id => {
+    const a = albums.find(x => x.id === id || x.id === String(id));
+    if (!a) return;
+    before.push([a, a.tags ? [...a.tags] : undefined]);
+    const t = remove ? (a.tags || []).filter(x => x.toLowerCase() !== tag.toLowerCase()) : normalizeTags([...(a.tags || []), tag]);
+    if (t.length) a.tags = t; else delete a.tags;
+  });
+  saveToStorage(); renderAlbums(); renderDiscographie(); clearAlbumSelection();
+  toastUndo(`${before.length} album(s) ${remove ? 'sans' : 'étiqueté(s)'} « ${tag} »`, () => {
+    before.forEach(([a, t]) => { if (t) a.tags = t; else delete a.tags; });
+    saveToStorage(); renderAlbums(); renderDiscographie();
+  });
+}
+
+// ===================== FICHE ALBUM EN PANNEAU LATÉRAL + ← / → (v2026.10.24-05) =====================
+// La fiche album s'ouvre en panneau à droite (styles dans theme.css) et permet de passer à
+// l'album précédent / suivant de la liste affichée (Collection ou Discographie, mêmes filtres et
+// tri) avec les boutons ‹ › ou les flèches du clavier (hors champ de saisie). Si des
+// modifications n'ont pas été enregistrées, on demande avant de changer d'album.
+let _albumNav = null; // { ids, source }
+let _albumFormSnap = '';
+
+function albumNavFromActiveView() {
+  const active = SECTIONS.find(s => document.getElementById('sec-' + s)?.classList.contains('active'));
+  try {
+    if (active === 'albums') return { ids: sortedAlbums(filteredAlbums()).map(a => a.id), source: 'Collection' };
+    if (active === 'discographie') return { ids: discoFilteredList().map(a => a.id), source: 'Discographie' };
+  } catch (e) { console.warn('Navigation fiche : liste indisponible', e); }
+  return null;
+}
+
+function albumFormSnapshot() {
+  const m = document.querySelector('#modal-album .modal');
+  if (!m) return '';
+  return JSON.stringify([...m.querySelectorAll('input,select,textarea')].map(el => el.type === 'checkbox' ? el.checked : el.value)) + '|' + _modalNote;
+}
+
+function renderAlbumNavBar(realId) {
+  const bar = document.getElementById('album-nav');
+  if (!bar) return;
+  const i = _albumNav ? _albumNav.ids.findIndex(x => String(x) === String(realId)) : -1;
+  if (!_albumNav || i < 0 || _albumNav.ids.length < 2) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  bar.innerHTML = `<button class="btn btn-sm" onclick="albumNavGo(-1)" ${i === 0 ? 'disabled' : ''} title="Album précédent (←)">‹</button>
+    <span style="font-family:var(--mono);font-size:11px;color:var(--text3)">${i + 1} / ${_albumNav.ids.length.toLocaleString('fr-FR')} · ${esc(_albumNav.source)}</span>
+    <button class="btn btn-sm" onclick="albumNavGo(1)" ${i === _albumNav.ids.length - 1 ? 'disabled' : ''} title="Album suivant (→)">›</button>`;
+}
+
+function albumNavGo(delta) {
+  if (!_albumNav) return;
+  const cur = document.getElementById('edit-id')?.value;
+  const i = _albumNav.ids.findIndex(x => String(x) === String(cur));
+  const next = _albumNav.ids[i + delta];
+  if (i < 0 || next == null) return;
+  if (albumFormSnapshot() !== _albumFormSnap) {
+    if (confirm('Enregistrer les modifications de cet album avant de passer au suivant ?\n\nOK = enregistrer · Annuler = abandonner les modifications')) saveAlbum();
+  }
+  const keep = _albumNav;
+  editAlbum(sid(next));
+  _albumNav = keep;
+  renderAlbumNavBar(next);
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if (!document.getElementById('modal-album')?.classList.contains('open')) return;
+  const tag = (e.target?.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+  e.preventDefault();
+  albumNavGo(e.key === 'ArrowLeft' ? -1 : 1);
+});
+
+// ===================== MISE EN PAGE MOBILE (v2026.10.24-05) =====================
+// Styles dans theme.css (@media max-width: 760px). Ici : menu latéral repliable (bouton ☰ de la
+// topbar, fond cliquable pour refermer, refermé automatiquement à chaque navigation) et vue
+// mosaïque par défaut en Collection / Discographie sur petit écran tant qu'aucun choix n'a été
+// mémorisé (les tableaux de 9-11 colonnes sont illisibles en largeur téléphone).
+function isNarrowScreen() { return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches); }
+function toggleSidebar(force) {
+  const open = force != null ? force : !document.body.classList.contains('sidebar-open');
+  document.body.classList.toggle('sidebar-open', open);
+}
+(function () {
+  try {
+    if (isNarrowScreen() && !localStorage.getItem(VIEW_MODE_LS_KEY)) _viewMode = { collection: 'grid', discographie: 'grid' };
+  } catch (e) {}
+})();
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
 // Todo section 11 : « PWA installable (manifest + service worker minimal) pour un accès

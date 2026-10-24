@@ -99,6 +99,7 @@
 <!-- APP_VERSION: v2026.07.25-03 — Valeur estimée Discogs dans Discographie + Vendre, détection des liens Discogs cassés. Demandé par Antoine : "je voudrais que la discographie fasse apparaître la valeur estimée discogs, notamment les articles dans la liste vente, je veux identifier les articles sans estimation pour vérifier que le lien discogs n'est pas erroné". Nouvelle colonne "Valeur DC" (discogsValueCell(), partagée) dans Discographie ET l'onglet Vendre (qui n'affichait jusqu'ici aucune donnée de valorisation) : montant si a.marketplace_price connu, badge cliquable "⚠️ Sans estimation" si discogsId présent mais jamais estimé (déclenche fetchSingleMarketplaceEstimate() — un fetch immédiat pour cet album précis, feedback direct en cas d'échec avec l'ID en cause, permet de confirmer tout de suite si le discogsId est cassé sans attendre le prochain passage du batch général), "–" neutre si pas de discogsId du tout. 2 nouveaux filtres dans le sélecteur Discographie : "💸 À vendre" (les articles forSale étaient jusqu'ici entièrement exclus de la vue Discographie — invisibles, donc leur valeur ne s'y voyait jamais) et "⚠️ Sans estimation Discogs" (tout CD avec discogsId et sans marketplace_price, à vendre ou non, pour l'audit demandé). Export CSV (Discographie + Vendre) mis à jour avec la colonne Valeur DC en conséquence. -->
 <!-- APP_VERSION: v2026.07.25-04 — Prix Discogs dans l'export offline, estimation en masse pour Ok + Wishlist. Demandé par Antoine : "est-ce qu'on pourrait inclure les prix dans l'export html, aller chercher les prix mini haut médian discogs pour tous les albums dans OK et wishlist". Clarifié avec Antoine au préalable : l'API Discogs officielle documentée n'expose que le prix le plus bas (/marketplace/stats, lowest_price/num_for_sale) — le "Low/Median/High" des pages Discogs.com vient de l'historique des ventes, une fonctionnalité web only non exposée par l'API (confirmé par le staff Discogs sur leur propre forum) ; décision d'Antoine : rester sur le prix le plus bas officiel plutôt que l'endpoint non documenté /marketplace/search. Nouveau : fetchOkMarketplaceStats() (bouton dédié dans l'onglet Ok, même fonction/cadence que le batch général de Valeur collection mais scopé aux CD du dossier Ok) et fetchWishlistMarketplaceEstimates() (bouton dédié Wishlist, décision d'Antoine : recherche automatique par artiste/album via searchDiscogs() — même branche Edge Function "discogs_search" que "IDs manquants" — puis fetchMarketplaceStats() sur le 1er résultat ; approximatif, pressage non garanti, marqué marketplace_price_approx et affiché avec un préfixe "≈" partout où le prix apparaît, wishlistValueCell() dédiée en plus de discogsValueCell()). Colonne "Valeur DC" ajoutée aux onglets Ok et Wishlist (+ export CSV des deux). Export offline Android : nouveaux champs price/priceCurrency/priceApprox sur les entrées owned et wishlist (pas sur discover, qui n'a pas de discogsId), nouveau badge "💰" (préfixé "≈" si approximatif) et tri "Tri : Prix". -->
 <!-- APP_VERSION: v2026.07.25-06 — "last.fm albums" : filtre RYM opérateur+valeur, sélection multiple + actions en masse. Demandé par Antoine, après clarification (il pensait initialement à un champ de note qui n'a jamais existé sur cet onglet — en réalité il voulait le même sélecteur de filtre RYM qu'en Collection, opérateur logique + valeur, plutôt qu'une liste de seuils fixes, PLUS la sélection multiple déjà présente sur "last.fm morceaux" mais absente ici). (1) filter-missing-rym (select à seuils fixes : "RYM ≥ 4.0", "RYM ≤ 2.5"...) remplacé par la paire filter-missing-rym-op/filter-missing-rym-val — même widget exact que Collection (onNoteOpChange()/matchNoteFilter(), zéro nouvelle logique de filtrage à écrire), permet n'importe quel opérateur (≥/>/=/≤/∅/✓) avec n'importe quelle valeur au lieu des 5 seuils pré-définis. (2) Sélection multiple ajoutée sur les cartes (jusqu'ici uniquement sur le tableau "last.fm morceaux", v2026.07.12-11) : case à cocher par carte + "Sélectionner tout (page courante)" + barre d'actions (🚫 Ignorer, 👂 À écouter, 🎯 Wishlist, Annuler la sélection), même sémantique toggle que les boutons individuels existants. selectedMissingKeys (clé = normalizeKey(artiste,album), même raisonnement que selectedMissingTrackKeys : computeMissing() n'a pas d'id stable, une clé texte survit à un changement de filtre/tri). 🔗 Associer et ▶️ YouTube restent individuels (non batchables), comme sur "last.fm morceaux". -->
+<!-- APP_VERSION: v2026.10.24-05 — Suite de la todo. (1) Tops › 🔁 À redécouvrir : albums possédés notés ≥ 4★ (ou RYM ≥ 3,8) absents des albums écoutés sur 3/6/12 mois (user.gettopalbums, jusqu'à 5 pages de 1 000). (2) 🏷️ Étiquettes perso (a.tags) : fiche avec suggestions, étiquetage en masse (« -nom » pour retirer, annulable), filtre Collection, chips sur lignes / mosaïque / Session notation / export hors ligne. (3) Fiche album en panneau latéral (theme.css) avec ‹ › et flèches clavier dans la liste Collection / Discographie affichée, confirmation si modifications non enregistrées. (4) Mise en page mobile (theme.css, ≤ 760 px) : menu repliable ☰, topbar sur 2 lignes, modales plein écran, grilles 1-2 colonnes, mosaïque par défaut tant qu'aucun choix n'est mémorisé. Colonne tags (IndexedDB, aucune migration). -->
 <!-- APP_VERSION: v2026.10.24-04 — Suite de la todo. (1) Vraies courbes SVG (svgLineChart, sans librairie) : écoutes mensuelles + moyenne mobile 3 mois, historique de valeur, courbes mensuelles des 6 genres principaux. (2) Nouvelle vue « 🗓️ Rétrospective » : année civile au choix — total de scrobbles, tops albums/artistes/morceaux (même cache que Tops), nouveaux artistes vs année précédente, très écoutés non possédés (ajout wishlist en un clic), côté collection (albums ajoutés, ventes, valeur, wishlist) + export PNG 1080×1350. (3) Tops : option « Comparer à la période précédente » (▲/▼/=/🆕 par ligne, entrées sorties du classement). (4) Audit : 🎧 albums écoutés à moitié (tracklist MusicBee vs écoutes last.fm par morceau). (5) Emplacement physique des CD (fiche, rangement en masse, filtre, affichage). (6) Stock qui vieillit : added_at = plus ancien « Date Added » du XML MusicBee (rempli au prochain réimport), ancienneté sur le badge Stock, tri « Ancienneté en stock », rappel en Session notation. Colonnes location / added_at (IndexedDB, aucune migration). -->
 <!-- APP_VERSION: v2026.10.24-03 — (1) Stockage persistant : navigator.storage.persist() demandé au démarrage (IndexedDB étant la seule source de vérité), état + espace utilisé affichés dans Import / Export ; date de la dernière sauvegarde (export JSON ou image IndexedDB) sous l'indicateur de synchro et rappel au démarrage au-delà de 14 jours (1×/jour max, bouton « Exporter maintenant »). (2) Session notation : moyenne des pistes notées proposée comme note de départ (bouton « Utiliser X★ »), mise à jour en direct. (3) Audit collection : bloc ⚖️ Notes vs écoutes (bien notés jamais écoutés / très écoutés mal notés, seuil relatif au 75e centile). (4) Ventes : état disque / pochette (échelle Goldmine) sur l'album, dans la modale de vente, le journal, l'export CSV et le texte d'annonce (colonne JSON condition, aucune migration IndexedDB). (5) Export hors ligne : prix cible et 🔥 bons plans sur les cartes wishlist + filtre dédié. (6) Tests automatisés livrés dans tests/ (npm test). -->
 <!-- APP_VERSION: v2026.10.24-02 — Suite de la todo section 12. (1) Toast « ↶ Annuler » (6 s, ou Ctrl/Cmd+Z hors champ) sur les actions rapides : à vendre / retrait de vente, ajout et retrait wishlist (deleteWish n'a plus de confirm()), notes (Session notation, étoiles Collection, saisie numérique — restaure aussi Notes à reporter), enregistrement d'une vente. (2) Bons plans Wishlist : prix cible par entrée (modale + clic sur la cellule Valeur DC), 🔥 quand l'estimation Discogs passe dessous, bons plans triés en tête, filtre Tous prix / 🔥 Bons plans / avec / sans prix cible, décompte dans le compteur et à la fin de l'estimation en masse. (3) Ctrl+K : section ⚡ Actions (navigation, tops prédéfinis, sync last.fm, estimation wishlist, export JSON, thème…) + navigation ↑/↓/Entrée. (4) Thème clair : nouveau fichier theme.css (variables sous :root[data-theme=light]), bascule ☀️/🌙 dans la topbar, choix mémorisé sinon préférence système, posé avant le premier rendu. (5) Vue mosaïque de pochettes en Collection et Discographie (bouton ▦/☰), même page/filtres/tri que le tableau, choix mémorisé. sw.js : CACHE_VERSION + theme.css dans le shell. Aucune migration. -->
@@ -147,6 +148,7 @@
 </div>
 
 <div class="app">
+<div id="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
 
 <!-- SIDEBAR -->
 <aside class="sidebar">
@@ -254,10 +256,11 @@
 
   <!-- TOPBAR -->
   <div class="topbar">
+    <button class="btn btn-sm" id="menu-toggle" onclick="toggleSidebar()" title="Menu" aria-label="Menu">☰</button>
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.10.24-04</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.10.24-05</span>
     <button class="btn btn-sm" id="theme-toggle" onclick="toggleTheme()" title="Basculer thème clair / sombre" style="margin-left:6px;padding:2px 7px">☀️</button>
     <div class="spacer"></div>
     <div class="search-wrap">
@@ -300,6 +303,7 @@
           <option value="">Tous genres</option>
         </select>
         <select id="filter-location" onchange="currentPage=1;renderAlbums()" style="display:none" title="Emplacement physique"></select>
+        <select id="filter-tag" onchange="currentPage=1;renderAlbums()" style="display:none" title="Étiquettes perso"></select>
         <select id="filter-wishlist" onchange="currentPage=1;renderAlbums()" title="Un album présent en collection peut légitimement rester en wishlist s'il n'est encore qu'en Stock (pas dans Discogs)">
           <option value="">Wishlist : tous</option>
           <option value="yes">🎯 En wishlist</option>
@@ -383,6 +387,7 @@
         <button class="btn btn-sm" onclick="bulkMarkForSale()" title="Marquer les albums sélectionnés comme à vendre">💸 Marquer à vendre</button>
         <button class="btn btn-sm" onclick="bulkUnmarkOk()" title="Retirer les albums sélectionnés du dossier Ok">✅ Retirer de Ok</button>
         <button class="btn btn-sm" onclick="bulkSetLocation()" title="Définir l'emplacement physique des albums sélectionnés">📍 Ranger…</button>
+        <button class="btn btn-sm" onclick="bulkTag()" title="Ajouter (ou retirer avec « -nom ») une étiquette aux albums sélectionnés">🏷️ Étiqueter…</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearAlbumSelection()">Annuler la sélection</button>
       </div>
@@ -599,6 +604,7 @@
         <button class="btn btn-sm" onclick="bulkMarkForSale()" title="Marquer les albums sélectionnés comme à vendre">💸 Marquer à vendre</button>
         <button class="btn btn-sm" onclick="bulkUnmarkOk()" title="Retirer les albums sélectionnés du dossier Ok">✅ Retirer de Ok</button>
         <button class="btn btn-sm" onclick="bulkSetLocation()" title="Définir l'emplacement physique des albums sélectionnés">📍 Ranger…</button>
+        <button class="btn btn-sm" onclick="bulkTag()" title="Ajouter (ou retirer avec « -nom ») une étiquette aux albums sélectionnés">🏷️ Étiqueter…</button>
         <div style="flex:1"></div>
         <button class="btn btn-sm" onclick="clearAlbumSelection()">Annuler la sélection</button>
       </div>
@@ -1090,12 +1096,13 @@
         <button class="covers-filter-btn active" id="tops-type-btn-albums" onclick="setTopsType('albums')">💿 Albums</button>
         <button class="covers-filter-btn" id="tops-type-btn-artists" onclick="setTopsType('artists')">🎤 Artistes</button>
         <button class="covers-filter-btn" id="tops-type-btn-tracks" onclick="setTopsType('tracks')">🎵 Morceaux</button>
+        <button class="covers-filter-btn" id="tops-type-btn-rediscover" onclick="setTopsType('rediscover')" title="Albums possédés bien notés que tu n'as pas écoutés depuis 3, 6 ou 12 mois">🔁 À redécouvrir</button>
         <span style="width:12px"></span>
         <select id="tops-period" onchange="onTopsPeriodChange()"></select>
         <select id="tops-cal-month" onchange="loadTops()" style="display:none"></select>
         <select id="tops-cal-year" onchange="loadTops()" style="display:none"></select>
         <button class="btn btn-sm" onclick="loadTops(true)" title="Recharger depuis last.fm">🔄</button>
-        <label class="form-check" style="font-size:12px;color:var(--text2);margin-left:8px" title="Évolution de rang par rapport à la période de même durée juste avant (appels last.fm supplémentaires)"><input type="checkbox" id="tops-compare" onchange="onTopsCompareChange()"> Comparer à la période précédente</label>
+        <label class="form-check" id="tops-compare-wrap" style="font-size:12px;color:var(--text2);margin-left:8px" title="Évolution de rang par rapport à la période de même durée juste avant (appels last.fm supplémentaires)"><input type="checkbox" id="tops-compare" onchange="onTopsCompareChange()"> Comparer à la période précédente</label>
       </div>
       <div class="toolbar" style="margin-bottom:10px">
         <input id="tops-filter-q" type="text" placeholder="Artiste / titre…" oninput="renderTops()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:12px;padding:6px 10px;border-radius:var(--radius);outline:none;width:150px">
@@ -2031,7 +2038,11 @@
 
 <div class="modal-overlay" id="modal-album">
   <div class="modal">
-    <h2 id="modal-album-title">Ajouter un album</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px">
+      <h2 id="modal-album-title" style="margin:0">Ajouter un album</h2>
+      <div id="album-nav" style="display:none;align-items:center;gap:6px"></div>
+      <button class="btn btn-sm" onclick="closeAlbumModal()" title="Fermer (Échap)">✕</button>
+    </div>
     <input type="hidden" id="edit-id">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
       <div class="form-row" style="grid-column:1/-1">
@@ -2087,6 +2098,11 @@
       <label>📍 Emplacement</label>
       <input type="text" id="f-location" list="location-list" placeholder="ex. Étagère 3, Boîte jazz…" style="width:240px">
       <datalist id="location-list"></datalist>
+    </div>
+    <div class="form-row" style="grid-column:1/-1">
+      <label>🏷 Étiquettes</label>
+      <input type="text" id="f-tags" placeholder="ex. à faire écouter, soirée (séparées par des virgules)" oninput="renderTagSuggestions()">
+      <div id="f-tags-suggest" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px"></div>
     </div>
     <div class="form-row" style="grid-column:1/-1">
       <label>📤 Prêt (CD physique)</label>

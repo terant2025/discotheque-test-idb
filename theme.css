@@ -1,4 +1,6 @@
-/* Thème clair — v2026.10.24-02.
+/* Surcouche CSS (styles.css reste inchangé) : thème clair (v2026.10.24-02), fiche album en
+   panneau latéral et mise en page mobile (v2026.10.24-05).
+   Thème clair — v2026.10.24-02.
    Redéfinit uniquement les variables de styles.css (inchangé) quand <html data-theme="light">.
    Le thème est posé par un petit script en tête de index.html avant le premier rendu
    (choix mémorisé dans localStorage « terant_theme », sinon préférence système), puis
@@ -38,3 +40,55 @@
 :root[data-theme="light"] .modal { box-shadow: 0 12px 40px rgba(0,0,0,0.18); }
 :root[data-theme="light"] .badge-stock { background: rgba(0,0,0,0.04); }
 :root[data-theme="light"] #search-menu { box-shadow: 0 6px 24px rgba(0,0,0,0.15) !important; }
+
+/* ===================== Fiche album en panneau latéral — v2026.10.24-05 ===================== */
+#modal-album.modal-overlay { justify-content: flex-end; align-items: stretch; backdrop-filter: none; background: rgba(0,0,0,0.35); }
+#modal-album .modal {
+  width: min(620px, 100vw); max-width: 100vw; height: 100vh; max-height: 100vh;
+  border-radius: 0; border-width: 0 0 0 1px; animation: panel-in 0.18s ease-out;
+}
+@keyframes panel-in { from { transform: translateX(40px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+
+/* ===================== Mise en page mobile — v2026.10.24-05 ===================== */
+#menu-toggle { display: none; }
+#sidebar-backdrop { display: none; }
+
+@media (max-width: 760px) {
+  #menu-toggle { display: inline-flex; padding: 4px 9px; font-size: 16px; }
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 1500; width: 260px;
+    transform: translateX(-100%); transition: transform 0.2s ease;
+    box-shadow: 0 0 30px rgba(0,0,0,0.4);
+  }
+  body.sidebar-open .sidebar { transform: none; }
+  body.sidebar-open #sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 1400; background: rgba(0,0,0,0.45); }
+
+  .topbar { height: auto; flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+  #topbar-sub, .topbar-sep, #app-version { display: none; }
+  .topbar .spacer { display: none; }
+  .search-wrap { order: 10; flex: 1 1 100%; }
+  .search-wrap input { width: 100%; }
+
+  .content { padding: 12px; }
+  .stats-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat-val { font-size: 20px; }
+  .import-grid { grid-template-columns: 1fr; }
+  .toolbar { gap: 6px; }
+  .toolbar-right { margin-left: 0; flex-wrap: wrap; }
+  .toolbar input[type="text"], .toolbar select { max-width: 100%; }
+  .covers-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  td { padding: 8px 6px; }
+
+  .modal-overlay { align-items: stretch; }
+  .modal, #modal-album .modal { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; border: none; padding: 16px; }
+  .modal > div[style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
+
+  .rate-session-card { flex-direction: column; padding: 16px; gap: 14px; }
+  .rate-session-cover { width: 110px; height: 110px; }
+  #rs-album-tracklist-list { column-count: 1; }
+  .rate-session-stars .star { font-size: 34px; }
+
+  #tops-list > div { flex-wrap: wrap; }
+  #tops-list > div > div:nth-last-child(2) { width: auto !important; flex: 1 1 140px; }
+  .toast { left: 12px; right: 12px; bottom: 12px; }
+}
