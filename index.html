@@ -99,6 +99,7 @@
 <!-- APP_VERSION: v2026.07.25-03 — Valeur estimée Discogs dans Discographie + Vendre, détection des liens Discogs cassés. Demandé par Antoine : "je voudrais que la discographie fasse apparaître la valeur estimée discogs, notamment les articles dans la liste vente, je veux identifier les articles sans estimation pour vérifier que le lien discogs n'est pas erroné". Nouvelle colonne "Valeur DC" (discogsValueCell(), partagée) dans Discographie ET l'onglet Vendre (qui n'affichait jusqu'ici aucune donnée de valorisation) : montant si a.marketplace_price connu, badge cliquable "⚠️ Sans estimation" si discogsId présent mais jamais estimé (déclenche fetchSingleMarketplaceEstimate() — un fetch immédiat pour cet album précis, feedback direct en cas d'échec avec l'ID en cause, permet de confirmer tout de suite si le discogsId est cassé sans attendre le prochain passage du batch général), "–" neutre si pas de discogsId du tout. 2 nouveaux filtres dans le sélecteur Discographie : "💸 À vendre" (les articles forSale étaient jusqu'ici entièrement exclus de la vue Discographie — invisibles, donc leur valeur ne s'y voyait jamais) et "⚠️ Sans estimation Discogs" (tout CD avec discogsId et sans marketplace_price, à vendre ou non, pour l'audit demandé). Export CSV (Discographie + Vendre) mis à jour avec la colonne Valeur DC en conséquence. -->
 <!-- APP_VERSION: v2026.07.25-04 — Prix Discogs dans l'export offline, estimation en masse pour Ok + Wishlist. Demandé par Antoine : "est-ce qu'on pourrait inclure les prix dans l'export html, aller chercher les prix mini haut médian discogs pour tous les albums dans OK et wishlist". Clarifié avec Antoine au préalable : l'API Discogs officielle documentée n'expose que le prix le plus bas (/marketplace/stats, lowest_price/num_for_sale) — le "Low/Median/High" des pages Discogs.com vient de l'historique des ventes, une fonctionnalité web only non exposée par l'API (confirmé par le staff Discogs sur leur propre forum) ; décision d'Antoine : rester sur le prix le plus bas officiel plutôt que l'endpoint non documenté /marketplace/search. Nouveau : fetchOkMarketplaceStats() (bouton dédié dans l'onglet Ok, même fonction/cadence que le batch général de Valeur collection mais scopé aux CD du dossier Ok) et fetchWishlistMarketplaceEstimates() (bouton dédié Wishlist, décision d'Antoine : recherche automatique par artiste/album via searchDiscogs() — même branche Edge Function "discogs_search" que "IDs manquants" — puis fetchMarketplaceStats() sur le 1er résultat ; approximatif, pressage non garanti, marqué marketplace_price_approx et affiché avec un préfixe "≈" partout où le prix apparaît, wishlistValueCell() dédiée en plus de discogsValueCell()). Colonne "Valeur DC" ajoutée aux onglets Ok et Wishlist (+ export CSV des deux). Export offline Android : nouveaux champs price/priceCurrency/priceApprox sur les entrées owned et wishlist (pas sur discover, qui n'a pas de discogsId), nouveau badge "💰" (préfixé "≈" si approximatif) et tri "Tri : Prix". -->
 <!-- APP_VERSION: v2026.07.25-06 — "last.fm albums" : filtre RYM opérateur+valeur, sélection multiple + actions en masse. Demandé par Antoine, après clarification (il pensait initialement à un champ de note qui n'a jamais existé sur cet onglet — en réalité il voulait le même sélecteur de filtre RYM qu'en Collection, opérateur logique + valeur, plutôt qu'une liste de seuils fixes, PLUS la sélection multiple déjà présente sur "last.fm morceaux" mais absente ici). (1) filter-missing-rym (select à seuils fixes : "RYM ≥ 4.0", "RYM ≤ 2.5"...) remplacé par la paire filter-missing-rym-op/filter-missing-rym-val — même widget exact que Collection (onNoteOpChange()/matchNoteFilter(), zéro nouvelle logique de filtrage à écrire), permet n'importe quel opérateur (≥/>/=/≤/∅/✓) avec n'importe quelle valeur au lieu des 5 seuils pré-définis. (2) Sélection multiple ajoutée sur les cartes (jusqu'ici uniquement sur le tableau "last.fm morceaux", v2026.07.12-11) : case à cocher par carte + "Sélectionner tout (page courante)" + barre d'actions (🚫 Ignorer, 👂 À écouter, 🎯 Wishlist, Annuler la sélection), même sémantique toggle que les boutons individuels existants. selectedMissingKeys (clé = normalizeKey(artiste,album), même raisonnement que selectedMissingTrackKeys : computeMissing() n'a pas d'id stable, une clé texte survit à un changement de filtre/tri). 🔗 Associer et ▶️ YouTube restent individuels (non batchables), comme sur "last.fm morceaux". -->
+<!-- APP_VERSION: v2026.10.24-03 — (1) Stockage persistant : navigator.storage.persist() demandé au démarrage (IndexedDB étant la seule source de vérité), état + espace utilisé affichés dans Import / Export ; date de la dernière sauvegarde (export JSON ou image IndexedDB) sous l'indicateur de synchro et rappel au démarrage au-delà de 14 jours (1×/jour max, bouton « Exporter maintenant »). (2) Session notation : moyenne des pistes notées proposée comme note de départ (bouton « Utiliser X★ »), mise à jour en direct. (3) Audit collection : bloc ⚖️ Notes vs écoutes (bien notés jamais écoutés / très écoutés mal notés, seuil relatif au 75e centile). (4) Ventes : état disque / pochette (échelle Goldmine) sur l'album, dans la modale de vente, le journal, l'export CSV et le texte d'annonce (colonne JSON condition, aucune migration IndexedDB). (5) Export hors ligne : prix cible et 🔥 bons plans sur les cartes wishlist + filtre dédié. (6) Tests automatisés livrés dans tests/ (npm test). -->
 <!-- APP_VERSION: v2026.10.24-02 — Suite de la todo section 12. (1) Toast « ↶ Annuler » (6 s, ou Ctrl/Cmd+Z hors champ) sur les actions rapides : à vendre / retrait de vente, ajout et retrait wishlist (deleteWish n'a plus de confirm()), notes (Session notation, étoiles Collection, saisie numérique — restaure aussi Notes à reporter), enregistrement d'une vente. (2) Bons plans Wishlist : prix cible par entrée (modale + clic sur la cellule Valeur DC), 🔥 quand l'estimation Discogs passe dessous, bons plans triés en tête, filtre Tous prix / 🔥 Bons plans / avec / sans prix cible, décompte dans le compteur et à la fin de l'estimation en masse. (3) Ctrl+K : section ⚡ Actions (navigation, tops prédéfinis, sync last.fm, estimation wishlist, export JSON, thème…) + navigation ↑/↓/Entrée. (4) Thème clair : nouveau fichier theme.css (variables sous :root[data-theme=light]), bascule ☀️/🌙 dans la topbar, choix mémorisé sinon préférence système, posé avant le premier rendu. (5) Vue mosaïque de pochettes en Collection et Discographie (bouton ▦/☰), même page/filtres/tri que le tableau, choix mémorisé. sw.js : CACHE_VERSION + theme.css dans le shell. Aucune migration. -->
 <!-- APP_VERSION: v2026.10.24-01 — 4 ajouts demandés par Antoine. (1) Liens de recherche directs Discogs/RYM/Bandcamp/MusicBrainz préremplis artiste+titre : menu 🔎 sur les lignes Collection, Discographie, Wishlist, Ventes, last.fm albums/morceaux et Tops ; liens inline dans la Session notation et la fiche album (searchLinksHtml/searchMenuBtn/openSearchMenu). (2) Session notation filtrable (mode Albums) : dossier, genre, artiste, écoutes min, « avec note RYM » — appliqués à buildRatingQueue() et au rendu, mémorisés en localStorage (terant_rs_filters_v1). (3) Suivi des ventes : nouvelle entrée de nav « 💸 Ventes » (section forsale, jusqu'ici inaccessible depuis le menu) avec onglets À vendre / Historique ; « 💰 Vendu » ouvre une modale prix/date/canal/note, écrit dans salesLog (meta.sales_log_data, inclus dans l'export/réimport JSON) puis retire le flag à vendre ; 📝 copie un texte d'annonce ; résumé total encaissé / écart vs estimation Discogs / valeur restante ; export CSV. (4) Nouvelle vue « 📈 Tops » : albums/artistes/morceaux les plus écoutés sur 7 j / 30 j / 3-6-12 mois / tout (user.gettop*) ou un mois / une année civile précis (user.getweekly*chart sur la plage, repli automatique en somme des semaines si last.fm ne renvoie rien) ; croisés avec la collection (possédé, CD, wishlist, note perso/RYM) ; filtres genre, année de parution (année d'origine de l'album possédé, sinon RYM), possession, recherche, limite d'affichage ; rang last.fm d'origine conservé sous filtre ; 🎯 ajout wishlist ; export CSV. sw.js CACHE_VERSION aligné. Aucune migration. -->
 <!-- APP_VERSION: v2026.10.23-01 — Session notation (mode Albums) : (1) indication du dossier de l'album courant (Discographie / Stock / Ok / À vendre / Album, + badge Wishlist s'il y figure) sous la ligne année·genre ; (2) boutons d'action contextuels à côté de ▶️ — 💸 « À vendre » (toggle, réutilise markForSale/unmarkForSale) si l'album est en Discographie, 🎯 « Wishlist » (toggle ajout/retrait) si l'album est en Stock ou Ok, même règle que la Collection ; (3) bouton 📋 copier à côté du titre et de l'artiste (albums et morceaux isolés) pour coller directement dans une recherche Discogs/RYM/etc. — navigator.clipboard avec repli execCommand si indisponible. -->
@@ -240,6 +241,7 @@
       <div class="save-dot"></div>
       <span id="save-label">Aucune sauvegarde</span>
     </div>
+    <div id="backup-age" onclick="nav('import');if(typeof switchImportTab==='function')switchImportTab('sources');setTimeout(()=>document.getElementById('storage-status')?.scrollIntoView?.({block:'center'}),50)" style="font-size:11px;font-family:var(--mono);color:var(--text3);margin-top:6px;cursor:pointer"></div>
   </div>
 </aside>
 
@@ -251,7 +253,7 @@
     <span class="topbar-title" id="topbar-title">Albums</span>
     <span class="topbar-sep">›</span>
     <span id="topbar-sub" style="font-size:12px;color:var(--text3)">Ma collection</span>
-    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.10.24-02</span>
+    <span id="app-version" title="Version déployée — sert à vérifier que le dernier fichier a bien été poussé" style="font-family:var(--mono);font-size:10px;color:var(--text3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:8px">v2026.10.24-03</span>
     <button class="btn btn-sm" id="theme-toggle" onclick="toggleTheme()" title="Basculer thème clair / sombre" style="margin-left:6px;padding:2px 7px">☀️</button>
     <div class="spacer"></div>
     <div class="search-wrap">
@@ -1053,7 +1055,7 @@
         </div>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th>Valeur DC</th><th style="width:80px"></th></tr></thead>
+        <thead><tr><th>Artiste / Album</th><th>Année</th><th>Supports</th><th>Note</th><th>Valeur DC</th><th title="Disque / pochette (échelle Goldmine)">État</th><th style="width:80px"></th></tr></thead>
         <tbody id="forsale-tbody"></tbody>
       </table></div>
       </div><!-- /forsale-pane-list -->
@@ -1389,6 +1391,7 @@
           <button class="btn btn-accent" onclick="openSnapshotsModal()">🕐 Journal / Snapshots</button>
           <button class="btn" onclick="localStorage.removeItem('supabase_anon_key');location.reload()">🟢 Reconfigurer la clé Supabase (migration)</button>
         </div>
+        <div id="storage-status" style="margin-top:12px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;color:var(--text2)"></div>
         <p style="margin-top:10px">Image complète IndexedDB (assurance) : contient TOUT tel quel — y compris les données volumineuses régénérables exclues du JSON ci-dessus (morceaux last.fm, données MusicBee brutes, tracklists, snapshots du Journal). Fichier volontairement gros et lent à produire : à utiliser en cas de nettoyage agressif du cache navigateur, pas comme sauvegarde de routine.</p>
         <div class="row-flex">
           <button class="btn" onclick="exportIndexedDBBackup()">💾 Image complète IndexedDB</button>
@@ -1531,6 +1534,15 @@
           </div>
           <div id="audit-mbscore-counter" style="font-size:12px;color:var(--text3);margin-bottom:8px"></div>
           <div id="audit-mbscore-list" style="max-height:320px;overflow-y:auto"></div>
+        </div>
+
+        <div style="flex:1 1 420px;min-width:320px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <h3 style="margin:0;font-size:14px">⚖️ Notes vs écoutes</h3>
+            <button class="btn btn-sm" onclick="renderAuditNotePlays()" title="Relancer">↻</button>
+          </div>
+          <div id="audit-noteplays-counter" style="font-size:12px;color:var(--text3);margin-bottom:8px"></div>
+          <div id="audit-noteplays-list" style="max-height:420px;overflow-y:auto"></div>
         </div>
 
         <div style="flex:1 1 420px;min-width:320px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px">
@@ -1680,6 +1692,7 @@
             <div id="rs-folder-info" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
             <div class="rate-session-plays" id="rs-plays"></div>
             <div id="rs-rym-suggestion" style="display:none"></div>
+            <div id="rs-track-suggestion" style="display:none"></div>
             <div class="rate-session-actions">
               <button class="btn" id="rs-listen-btn" onclick="rsListenCurrent()">▶️ Écouter sur YouTube Music</button>
               <span id="rs-folder-actions" style="display:inline-flex;gap:6px;margin-left:6px;flex-wrap:wrap"></span>
@@ -1975,6 +1988,7 @@
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
       <div class="form-row"><label>Prix de vente (€)</label><input type="text" id="sale-price" inputmode="decimal" placeholder="ex. 12,50" onkeydown="if(event.key==='Enter')confirmSale()"></div>
       <div class="form-row"><label>Date</label><input type="date" id="sale-date"></div>
+      <div id="sale-condition-wrap" style="display:contents"></div>
       <div class="form-row" style="grid-column:1/-1"><label>Canal</label><select id="sale-channel"></select></div>
       <div class="form-row" style="grid-column:1/-1"><label>Note (acheteur, état…)</label><input type="text" id="sale-notes" placeholder="facultatif"></div>
     </div>

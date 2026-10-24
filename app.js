@@ -503,6 +503,7 @@ async function exportIndexedDBBackup() {
     });
     download(`discotheque_indexeddb_image_${new Date().toISOString().slice(0, 10)}.json`, payload, 'application/json');
     toast('✓ Image IndexedDB téléchargée (fichier volumineux — contient tout, y compris lastfm_tracks/musicbee_tracks/tracklists/snapshots)');
+    markBackupDone('idb');
   } catch(e) {
     console.error('Export image IndexedDB échoué', e);
     toast('Erreur export image IndexedDB : ' + (e.message || e), 'error');
@@ -961,6 +962,7 @@ async function saveToSupabase(opts) {
       is_compilation: !!a.isCompilation,
       loaned_to:      a.loaned_to || null,
       loaned_since:   a.loaned_since || null,
+      condition:      a.condition ? JSON.stringify(a.condition) : null,
 	  primary_folder: a.primaryFolder || 'album',
       field_provenance: a.field_provenance ? JSON.stringify(a.field_provenance) : null,
       updated_at:     now,
@@ -1217,6 +1219,7 @@ async function loadFromSupabase() {
         isCompilation: !!a.is_compilation,
         loaned_to:     a.loaned_to || undefined,
         loaned_since:  a.loaned_since || undefined,
+        condition: (() => { try { return a.condition ? JSON.parse(a.condition) : undefined; } catch(e) { return undefined; } })(),
 		primaryFolder: a.primary_folder || 'album',
         field_provenance: (() => { try { return a.field_provenance ? JSON.parse(a.field_provenance) : undefined; } catch(e) { return undefined; } })(),
 		
@@ -1854,7 +1857,7 @@ function nav(id) {
   if (id === 'ratesession') initRatingSession();
   if (id === 'tops') initTopsView();
   if (id === 'forsale') setForSaleTab(_forSaleTab);
-  if (id === 'import') { renderAssocReview(); renderMissingIds(); updateNavBadges(); }
+  if (id === 'import') { renderAssocReview(); renderMissingIds(); updateNavBadges(); renderStorageStatus(); }
   if (id === 'artistview') renderArtistView();
   if (id === 'artistlinks') renderArtistLinks();
   if (id === 'marketvalue') renderMarketValue();
@@ -8199,7 +8202,7 @@ function renderForSale() {
   if (badge) badge.textContent = list.length;
   const tbody = document.getElementById('forsale-tbody');
   renderSalesSummary();
-  if (!list.length) { tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">💸</div>Aucun album à vendre</div></td></tr>'; return; }
   const fmtBadge = a => [a.cd?'<span class="badge badge-cd">CD</span>':'', a.flac?'<span class="badge badge-flac">FLAC</span>':'', a.mp3?'<span class="badge badge-mp3">MP3</span>':''].filter(Boolean).join('');
    const noteCell = a => a.note ? `<span style="font-family:var(--mono);font-size:12px;color:var(--accent)">${a.note.toFixed(1)}<span style="font-size:10px;opacity:0.7">★</span></span>` : `<span style="color:var(--text3);font-size:11px">–</span>`;
   tbody.innerHTML = list.map(a => `<tr>
@@ -8208,6 +8211,7 @@ function renderForSale() {
     <td><div class="badges-cell">${fmtBadge(a)}</div></td>
     <td>${noteCell(a)}</td>
     <td>${discogsValueCell(a)}</td>
+    <td style="white-space:nowrap" title="État disque / pochette (échelle Goldmine) — repris dans l'annonce et le journal des ventes">${conditionSelectHtml('', a.condition?.media, `setAlbumCondition('${sid(a.id)}','media',this.value)`, true)} ${conditionSelectHtml('', a.condition?.sleeve, `setAlbumCondition('${sid(a.id)}','sleeve',this.value)`, true)}</td>
     <td style="display:flex;gap:4px;align-items:center">
       <button class="btn btn-sm btn-accent" onclick="openSaleModal('${sid(a.id)}')" title="Enregistrer la vente (prix, date, canal)">💰 Vendu</button>
       <button class="btn btn-sm" onclick="copyListingText('${sid(a.id)}')" title="Copier un texte d'annonce prêt à coller">📝</button>
@@ -11012,6 +11016,7 @@ function exportJSON() {
   }, null, 2);
   download('discothèque_backup.json', data, 'application/json');
   toast('Export JSON téléchargé ✓');
+  markBackupDone('json');
 }
 
 async function reimportJSON(input) {
@@ -11201,6 +11206,8 @@ function exportOfflineAndroid() {
     price: w.marketplace_price ?? null,
     priceCurrency: w.marketplace_currency || 'EUR',
     priceApprox: true,
+    target: w.targetPrice ?? null,
+    deal: wishIsDeal(w),
   }));
   const fullList = [...list, ...extra, ...wish];
   const html = buildOfflineHtml(fullList);
@@ -11249,7 +11256,7 @@ function buildOfflineHtml(list) {
     '<div class="row">',
     '<select id="f-folder"><option value="">Tous dossiers</option><option value="discographie">Discographie</option><option value="ok">Ok</option><option value="stock">Stock</option><option value="forsale">Vendre</option></select>',
     '<select id="f-format"><option value="">Tous formats</option><option value="cd">💿 CD</option><option value="num">🖥 Numérique</option></select>',
-    '<select id="f-status"><option value="">Tout (collection + découvertes + wishlist)</option><option value="owned">En collection seulement</option><option value="discover">🔭 Découvertes RYM/last.fm</option><option value="wishlist">🎯 Wishlist</option></select>',
+    '<select id="f-status"><option value="">Tout (collection + découvertes + wishlist)</option><option value="owned">En collection seulement</option><option value="discover">🔭 Découvertes RYM/last.fm</option><option value="wishlist">🎯 Wishlist</option><option value="deal">🔥 Bons plans wishlist</option></select>',
     '<select id="sort"><option value="artist">Tri : Artiste</option><option value="year">Tri : Année</option><option value="note">Tri : Note MB</option><option value="plays">Tri : Écoutes</option><option value="price">Tri : Prix</option></select>',
     '</div>',
     '<div class="row"><label class="check"><input type="checkbox" id="f-rym" checked> Inclure RYM</label><label class="check"><input type="checkbox" id="f-lastfm" checked> Inclure last.fm</label></div>',
@@ -11269,7 +11276,7 @@ function buildOfflineHtml(list) {
     '    if(qArtist && norm(a.artist).indexOf(qArtist)===-1) return false;',
     '    if(qAlbum && norm(a.album).indexOf(qAlbum)===-1) return false;',
     "    if(qYear && String(a.year||'').indexOf(qYear)===-1) return false;",
-    "    if(status && a.kind!==status) return false;",
+    "    if(status==='deal'){ if(!a.deal) return false; } else if(status && a.kind!==status) return false;",
     "    if(a.kind==='discover' && !((a.fromRym&&rymOn)||(a.fromLastfm&&lastfmOn))) return false;",
     '    if(folder && (a.folders||[]).indexOf(folder)===-1) return false;',
     "    if(format==='cd' && !a.cd) return false;",
@@ -11294,6 +11301,7 @@ function buildOfflineHtml(list) {
     "    if(a.noteRYM) badges.push('<span class=\"badge\">RYM '+a.noteRYM+'</span>');",
     "    if(a.noteDiscogs) badges.push('<span class=\"badge\">Discogs '+a.noteDiscogs+'</span>');",
     "    if(a.price!=null) badges.push('<span class=\"badge\" style=\"color:var(--accent);border-color:var(--accent)\">'+(a.priceApprox?'≈ ':'')+'💰 '+Number(a.price).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(a.priceCurrency==='EUR'?'€':(a.priceCurrency||''))+'</span>');",
+    "    if(a.target!=null) badges.push('<span class=\"badge\"'+(a.deal?' style=\"color:#ffc060;border-color:#ffc060;font-weight:600\"':'')+'>'+(a.deal?'🔥 ':'')+'cible ≤ '+Number(a.target).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €</span>');",
     "    if(a.plays) badges.push('<span class=\"badge\">'+a.plays.toLocaleString('fr-FR')+' écoutes</span>');",
     "    const cls=a.kind==='discover'?' oc':a.kind==='wishlist'?' wish':'';",
     "    return '<div class=\"card'+cls+'\"><div class=\"title\">'+esc(a.album)+'</div><div class=\"sub\">'+esc(a.artist)+(a.year?' · '+esc(a.year):'')+(a.genre?' · '+esc(a.genre):'')+'</div><div class=\"badges\">'+badges.join('')+'</div></div>';",
@@ -12217,6 +12225,8 @@ async function initApp() {
   }
 
   const loaded = await loadLocalCollection();
+  ensurePersistentStorage();
+  if (loaded) setTimeout(maybeRemindBackup, 4000);
   if (!loaded) {
     // IndexedDB vide. Deux cas possibles :
     // (a) tout premier lancement / navigateur jamais migré → démo + écran de config.
@@ -14837,6 +14847,7 @@ function renderRatingSession() {
     if (sugEl) { sugEl.style.display = 'none'; sugEl.innerHTML = ''; }
     if (tracklistWrapEl) tracklistWrapEl.style.display = 'none';
     rsRenderFolderInfo(null);
+    rsRenderTrackSuggestion(null);
     { const sl = document.getElementById('rs-search-links'); if (sl) sl.innerHTML = searchLinksHtml(t.artist, t.title, 'track'); }
     document.getElementById('rs-stars').innerHTML = [1, 2, 3, 4, 5].map(i => `<button class="star" onclick="rsRateCurrent(${i})" title="${i}★">★</button>`).join('');
   } else {
@@ -14849,6 +14860,7 @@ function renderRatingSession() {
     document.getElementById('rs-meta').textContent = [a.year, a.genre].filter(Boolean).join(' · ');
     document.getElementById('rs-plays').textContent = a.plays ? `${a.plays} écoute(s) last.fm` : 'Pas d’écoutes last.fm connues';
     rsRenderFolderInfo(a);
+    rsRenderTrackSuggestion(a);
     { const sl = document.getElementById('rs-search-links'); if (sl) sl.innerHTML = searchLinksHtml(a.artist, a.album, 'album'); }
 
     // Suggestion RYM : point de départ affiché, jamais posée automatiquement à la place d'une note perso.
@@ -15362,6 +15374,10 @@ function _applyAlbumTrackRating(albumId, title, newVal) {
   // album, et panneau embarqué dans la Session notation) — chacun est un no-op si absent du DOM.
   renderAlbumTracklistPanel(albumId, 'modal-tracklist-list');
   renderAlbumTracklistPanel(albumId, 'rs-album-tracklist-list');
+  if (document.getElementById('sec-ratesession')?.classList.contains('active')) {
+    const cur = rsCurrentAlbum();
+    if (cur && String(cur.id) === String(albumId)) rsRenderTrackSuggestion(cur);
+  }
 }
 
 function rateAlbumTrack(albumId, title, value) {
@@ -15989,6 +16005,7 @@ function renderAuditDiscogCompletion() {
 function renderAudit() {
   renderAuditMbScores();
   renderAuditRymDivergence();
+  renderAuditNotePlays();
   renderAuditSourceDivergences();
   renderAuditDiscogCompletion();
   const cmpBtn = document.getElementById('audit-cmp-scan-btn');
@@ -16833,6 +16850,9 @@ function openSaleModal(idSid) {
   try { last = localStorage.getItem('terant_last_sale_channel') || ''; } catch (e) {}
   ch.innerHTML = SALE_CHANNELS.map(c => `<option ${c === last ? 'selected' : ''}>${c}</option>`).join('');
   document.getElementById('sale-notes').value = '';
+  const cw = document.getElementById('sale-condition-wrap');
+  if (cw) cw.innerHTML = `<div class="form-row"><label>État disque</label>${conditionSelectHtml('sale-cond-media', a.condition?.media)}</div>
+    <div class="form-row"><label>État pochette</label>${conditionSelectHtml('sale-cond-sleeve', a.condition?.sleeve)}</div>`;
   document.getElementById('modal-sale').classList.add('open');
   setTimeout(() => document.getElementById('sale-price')?.select(), 50);
 }
@@ -16856,7 +16876,13 @@ function confirmSale() {
     channel, notes: (document.getElementById('sale-notes').value || '').trim(),
     estimate: a.marketplace_price ?? null, estimateCurrency: a.marketplace_currency || null,
     cover_url: a.cover_url || null,
+    condition: (() => {
+      const media = document.getElementById('sale-cond-media')?.value || '';
+      const sleeve = document.getElementById('sale-cond-sleeve')?.value || '';
+      return media || sleeve ? { media: media || undefined, sleeve: sleeve || undefined } : undefined;
+    })(),
   });
+  { const last = salesLog[salesLog.length - 1]; if (last.condition) a.condition = { ...last.condition }; }
   // Retire le flag « à vendre » (même mutation que unmarkForSale, qui sauvegarde et rafraîchit)
   unmarkForSale(sid(a.id), { silent: true });
   closeSaleModal();
@@ -16934,7 +16960,7 @@ function renderSalesHistory() {
     return `<tr>
       <td><div class="artist-cell"><div class="artist-avatar">${cover}</div><div class="artist-info"><div class="name">${esc(s.album)}</div><div class="sub">${esc(s.artist)}${s.year ? ' · ' + esc(s.year) : ''}${s.discogsId ? ` <a href="https://www.discogs.com/release/${encodeURIComponent(s.discogsId)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:10px;color:var(--text3);text-decoration:none">#${esc(s.discogsId)}</a>` : ''}</div></div></div></td>
       <td class="mono">${s.soldAt ? new Date(s.soldAt + 'T12:00:00').toLocaleDateString('fr-FR') : '–'}</td>
-      <td style="font-size:12px">${esc(s.channel || '–')}</td>
+      <td style="font-size:12px">${esc(s.channel || '–')}${s.condition ? `<div style="font-size:10px;color:var(--text3);font-family:var(--mono)">${esc([s.condition.media, s.condition.sleeve].filter(Boolean).join(' / '))}</div>` : ''}</td>
       <td class="mono" style="color:var(--text)">${(s.price || 0).toFixed(2)} €</td>
       <td class="mono">${s.estimate != null ? Number(s.estimate).toFixed(2) + ' ' + (s.estimateCurrency === 'EUR' || !s.estimateCurrency ? '€' : s.estimateCurrency) : '–'}</td>
       <td>${diffHtml}</td>
@@ -16944,9 +16970,9 @@ function renderSalesHistory() {
 }
 
 function exportSalesCSV() {
-  const rows = [['Date', 'Artiste', 'Album', 'Année', 'Label', 'Réf.', 'Discogs ID', 'Canal', 'Prix (€)', 'Estimation Discogs', 'Écart', 'Notes']];
+  const rows = [['Date', 'Artiste', 'Album', 'Année', 'Label', 'Réf.', 'Discogs ID', 'Canal', 'État disque', 'État pochette', 'Prix (€)', 'Estimation Discogs', 'Écart', 'Notes']];
   [...salesLog].sort((a, b) => (a.soldAt || '').localeCompare(b.soldAt || '')).forEach(s => {
-    rows.push([s.soldAt, s.artist, s.album, s.year, s.label, s.catno, s.discogsId, s.channel, (s.price || 0).toFixed(2),
+    rows.push([s.soldAt, s.artist, s.album, s.year, s.label, s.catno, s.discogsId, s.channel, s.condition?.media || '', s.condition?.sleeve || '', (s.price || 0).toFixed(2),
       s.estimate != null ? Number(s.estimate).toFixed(2) : '', s.estimate != null ? (s.price - s.estimate).toFixed(2) : '', s.notes || '']);
   });
   download(`ventes_${new Date().toISOString().slice(0, 10)}.csv`, '﻿' + rows.map(toCSVRow).join('\n'), 'text/csv;charset=utf-8');
@@ -16967,7 +16993,8 @@ function buildListingText(a) {
   ];
   if (a.label) lines.push(`Label : ${a.label}${a.catno ? ' — réf. ' + a.catno : ''}`);
   if (a.genre) lines.push(`Genre : ${a.genre}`);
-  lines.push('État : ');
+  { const c = a.condition || {}; const lab = v => CONDITIONS.find(x => x.v === v)?.label || v;
+    lines.push(c.media || c.sleeve ? `État : ${[c.media ? 'disque ' + lab(c.media) : '', c.sleeve ? 'pochette ' + lab(c.sleeve) : ''].filter(Boolean).join(' · ')}` : 'État : '); }
   if (tracks.length) {
     lines.push('', 'Titres :');
     tracks.slice(0, 30).forEach((t, i) => lines.push(`${t.position || (i + 1)}. ${t.title}`));
@@ -17596,6 +17623,203 @@ function renderMosaic(view, slice) {
   grid.innerHTML = slice.length
     ? slice.map(mosaicCard).join('')
     : '<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📀</div>Aucun album</div>';
+}
+
+// ===================== STOCKAGE PERSISTANT + RAPPEL DE SAUVEGARDE (v2026.10.24-03) =====================
+// Depuis la Phase 1 (v2026.07.13), IndexedDB est la SEULE source de vérité : si le navigateur
+// l'efface (pression d'espace disque, « stockage au mieux » par défaut), la collection disparaît.
+// 1) navigator.storage.persist() demandé au démarrage → le navigateur s'engage à ne plus effacer
+//    les données de ce site automatiquement (Chrome l'accorde souvent sans question, surtout pour
+//    une PWA installée ; Firefox peut demander à l'utilisateur).
+// 2) Date de la dernière sauvegarde (export JSON ou image IndexedDB) mémorisée localement, affichée
+//    sous l'indicateur de synchro et dans Import / Export, + rappel au démarrage au-delà de 14 jours
+//    (une fois par jour au plus, bouton direct pour exporter).
+const LS_LAST_BACKUP = 'terant_last_full_backup';
+const LS_BACKUP_SNOOZE = 'terant_backup_reminder_day';
+const BACKUP_REMIND_DAYS = 14;
+let _storagePersisted = null; // true / false / null (API indisponible)
+
+async function ensurePersistentStorage() {
+  try {
+    if (navigator.storage?.persisted) {
+      _storagePersisted = await navigator.storage.persisted();
+      if (!_storagePersisted && navigator.storage.persist) _storagePersisted = await navigator.storage.persist();
+    } else _storagePersisted = null;
+  } catch (e) { _storagePersisted = null; }
+  renderStorageStatus();
+  return _storagePersisted;
+}
+
+function markBackupDone(kind) {
+  try { localStorage.setItem(LS_LAST_BACKUP, JSON.stringify({ at: new Date().toISOString(), kind })); } catch (e) {}
+  renderStorageStatus();
+}
+
+function lastBackupInfo() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_LAST_BACKUP) || 'null');
+    if (!v?.at) return null;
+    return { ...v, days: Math.floor((Date.now() - new Date(v.at).getTime()) / 86400000) };
+  } catch (e) { return null; }
+}
+
+function _fmtBytes(n) {
+  if (!n && n !== 0) return '?';
+  const u = ['o', 'Ko', 'Mo', 'Go']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toLocaleString('fr-FR', { maximumFractionDigits: i ? 1 : 0 }) + ' ' + u[i];
+}
+
+async function renderStorageStatus() {
+  const info = lastBackupInfo();
+  const ageTxt = !info ? 'jamais' : info.days === 0 ? 'aujourd’hui' : info.days === 1 ? 'hier' : `il y a ${info.days} j`;
+  const late = !info || info.days >= BACKUP_REMIND_DAYS;
+  const side = document.getElementById('backup-age');
+  if (side) {
+    side.textContent = `💾 Sauvegarde : ${ageTxt}`;
+    side.style.color = late ? 'var(--amber)' : 'var(--text3)';
+    side.title = (info ? `Dernière sauvegarde (${info.kind === 'idb' ? 'image IndexedDB' : 'JSON'}) le ${new Date(info.at).toLocaleString('fr-FR')}` : 'Aucune sauvegarde enregistrée depuis ce navigateur')
+      + ' — cliquer pour ouvrir Import / Export';
+  }
+  const el = document.getElementById('storage-status');
+  if (!el) return;
+  let usage = '';
+  try {
+    if (navigator.storage?.estimate) {
+      const e = await navigator.storage.estimate();
+      usage = ` · ${_fmtBytes(e.usage)} utilisés${e.quota ? ' sur ' + _fmtBytes(e.quota) + ' disponibles' : ''}`;
+    }
+  } catch (e) {}
+  const pers = _storagePersisted === true ? '<span style="color:var(--accent)">✓ persistant</span> (le navigateur ne l’effacera pas de lui-même)'
+    : _storagePersisted === false ? '<span style="color:var(--amber)">⚠️ non persistant</span> — le navigateur peut effacer les données en cas de manque d’espace. <button class="btn btn-sm" onclick="ensurePersistentStorage()">Redemander</button> (installer l’app en PWA aide souvent)'
+    : '<span style="color:var(--text3)">état inconnu</span> (API non disponible dans ce navigateur)';
+  el.innerHTML = `<div>Stockage local : ${pers}${usage}</div>
+    <div style="margin-top:4px">Dernière sauvegarde : <strong style="color:${late ? 'var(--amber)' : 'var(--text)'}">${ageTxt}</strong>${info ? ` (${info.kind === 'idb' ? 'image IndexedDB complète' : 'export JSON'})` : ''}${late ? ` — rappel au-delà de ${BACKUP_REMIND_DAYS} jours` : ''}</div>`;
+}
+
+// Toast avec un bouton d'action (distinct de toastUndo : pas d'annulation, pas de Ctrl+Z)
+function toastAction(msg, label, fn, type = 'warn', ms = 12000) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  _undoAction = null;
+  el.innerHTML = '';
+  const span = document.createElement('span'); span.textContent = msg;
+  const b = document.createElement('button');
+  b.className = 'btn btn-sm'; b.textContent = label; b.style.marginLeft = '12px';
+  b.onclick = () => { el.classList.remove('show'); el.style.pointerEvents = ''; fn(); };
+  el.append(span, b);
+  el.className = 'toast show ' + type;
+  el.style.pointerEvents = 'auto';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.classList.remove('show'); el.style.pointerEvents = ''; }, ms);
+}
+
+function maybeRemindBackup() {
+  if (!albums.length) return; // collection vide / démo : rien à sauvegarder
+  const info = lastBackupInfo();
+  if (info && info.days < BACKUP_REMIND_DAYS) return;
+  const today = new Date().toISOString().slice(0, 10);
+  try { if (localStorage.getItem(LS_BACKUP_SNOOZE) === today) return; localStorage.setItem(LS_BACKUP_SNOOZE, today); } catch (e) {}
+  toastAction(info ? `💾 Dernière sauvegarde il y a ${info.days} jours` : '💾 Aucune sauvegarde de la collection depuis ce navigateur', 'Exporter maintenant', () => exportJSON());
+}
+
+// ===================== NOTE SUGGÉRÉE DEPUIS LES PISTES (v2026.10.24-03) =====================
+// Session notation (mode Albums) : moyenne des pistes déjà notées de l'album courant (note
+// posée dans l'app via trackNoteOverrides, sinon note MusicBee importée), proposée comme point
+// de départ à côté de la suggestion RYM — jamais posée automatiquement. Se met à jour en direct
+// quand on note une piste du panneau tracklist.
+function albumTrackRatingStats(albumId) {
+  const mb = (albumTracksCache[albumId] || []).filter(t => t.source === 'musicbee' && t.title);
+  const rated = mb.map(t => getAlbumTrackRating(albumId, t.title) || 0).filter(n => n > 0);
+  const avg = rated.length ? rated.reduce((s, n) => s + n, 0) / rated.length : 0;
+  return { n: rated.length, total: mb.length, avg, suggested: Math.round(avg * 2) / 2 };
+}
+
+function rsRenderTrackSuggestion(a) {
+  const el = document.getElementById('rs-track-suggestion');
+  if (!el) return;
+  const st = a ? albumTrackRatingStats(a.id) : { n: 0 };
+  if (!st.n) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+  el.innerHTML = `<div style="font-size:12px;color:var(--accent);margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    Moyenne des pistes notées : ${st.avg.toFixed(2)}★ <span style="color:var(--text3)">(${st.n}/${st.total} piste${st.total > 1 ? 's' : ''})</span>
+    <button class="btn btn-xs" onclick="rsRateCurrent(${st.suggested})" title="Noter l'album ${st.suggested}★">Utiliser ${st.suggested}★</button>
+  </div>`;
+}
+
+// ===================== AUDIT : NOTES VS ÉCOUTES (v2026.10.24-03) =====================
+// Deux listes de désaccord entre ce qu'on dit (note perso) et ce qu'on fait (écoutes last.fm) :
+// bien notés mais quasi jamais écoutés (à réécouter, ou note à revoir) et très écoutés mais mal
+// notés (note probablement trop sévère). Seuil « très écouté » relatif à la collection : 75e
+// centile des écoutes des albums notés (min. 20), pour s'adapter au volume d'écoute réel.
+const NOTEPLAYS_HIGH_NOTE = 4.5, NOTEPLAYS_LOW_PLAYS = 3, NOTEPLAYS_LOW_NOTE = 2.5;
+
+function computeNotePlaysDisagreements() {
+  const rated = ownedAlbumsForCovers().filter(a => a.note > 0);
+  const playsSorted = rated.map(a => a.plays || 0).filter(p => p > 0).sort((x, y) => x - y);
+  const p75 = playsSorted.length ? playsSorted[Math.floor(playsSorted.length * 0.75)] : 0;
+  const highPlays = Math.max(20, p75);
+  const lovedUnplayed = rated.filter(a => a.note >= NOTEPLAYS_HIGH_NOTE && (a.plays || 0) <= NOTEPLAYS_LOW_PLAYS)
+    .sort((x, y) => y.note - x.note || (x.plays || 0) - (y.plays || 0));
+  const playedDisliked = rated.filter(a => a.note <= NOTEPLAYS_LOW_NOTE && (a.plays || 0) >= highPlays)
+    .sort((x, y) => (y.plays || 0) - (x.plays || 0));
+  return { lovedUnplayed, playedDisliked, highPlays };
+}
+
+function renderAuditNotePlays() {
+  const el = document.getElementById('audit-noteplays-list');
+  if (!el) return;
+  const { lovedUnplayed, playedDisliked, highPlays } = computeNotePlaysDisagreements();
+  const ctr = document.getElementById('audit-noteplays-counter');
+  if (ctr) ctr.textContent = `${lovedUnplayed.length} bien noté(s) peu écouté(s) · ${playedDisliked.length} très écouté(s) mal noté(s)`;
+  const row = a => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="editAlbum('${sid(a.id)}')">
+    <div style="min-width:0"><div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.album)}</div><div style="font-size:11px;color:var(--text3)">${esc(a.artist)}</div></div>
+    <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+      <span style="font-family:var(--mono);font-size:12px"><span style="color:var(--accent)">${a.note.toFixed(1)}★</span> · ${(a.plays || 0).toLocaleString('fr-FR')} ▶</span>
+      <button class="btn btn-xs" onclick="event.stopPropagation();openYouTubeMusicForAlbumId('${sid(a.id)}')" title="Écouter">▶️</button>
+    </div>
+  </div>`;
+  const block = (title, sub, list) => `<div style="margin-bottom:12px">
+    <div style="font-size:12px;font-weight:600;margin:4px 0 2px">${title} <span style="font-weight:400;color:var(--text3)">(${list.length})</span></div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:4px">${sub}</div>
+    ${list.length ? list.slice(0, 50).map(row).join('') + (list.length > 50 ? `<div style="font-size:11px;color:var(--text3);padding:4px 0">… ${list.length - 50} de plus</div>` : '') : '<div style="font-size:12px;color:var(--text3);padding:6px 0">Aucun</div>'}
+  </div>`;
+  el.innerHTML =
+    block('💎 Bien notés, presque jamais écoutés', `note ≥ ${NOTEPLAYS_HIGH_NOTE}★ et ≤ ${NOTEPLAYS_LOW_PLAYS} écoutes — à réécouter, ou note à revoir`, lovedUnplayed) +
+    block('🔁 Très écoutés, mal notés', `note ≤ ${NOTEPLAYS_LOW_NOTE}★ et ≥ ${highPlays} écoutes (75e centile de tes albums notés) — note peut-être trop sévère`, playedDisliked);
+}
+
+// ===================== ÉTAT DU DISQUE (v2026.10.24-03) =====================
+// Échelle Goldmine (celle de Discogs), disque et pochette séparés. Stocké sur l'album
+// (a.condition = { media, sleeve }) pour les CD à vendre, recopié dans le journal des ventes et
+// repris dans le texte d'annonce. Persisté via la colonne JSON `condition` de la table albums
+// (IndexedDB : aucune migration).
+const CONDITIONS = [
+  { v: 'M', label: 'M — Neuf (scellé)' }, { v: 'NM', label: 'NM — Quasi neuf' },
+  { v: 'VG+', label: 'VG+ — Très bon état' }, { v: 'VG', label: 'VG — Bon état' },
+  { v: 'G+', label: 'G+ — Correct' }, { v: 'G', label: 'G — Usé' },
+  { v: 'F', label: 'F — Abîmé' }, { v: 'P', label: 'P — Mauvais état' },
+];
+
+function conditionSelectHtml(id, value, onchange, compact) {
+  return `<select ${id ? `id="${id}"` : ''} ${onchange ? `onchange="${onchange}"` : ''} onclick="event.stopPropagation()" style="${compact ? 'font-size:11px;padding:3px 4px' : ''}">
+    <option value="">${compact ? '–' : 'Non précisé'}</option>
+    ${CONDITIONS.map(c => `<option value="${c.v}" ${c.v === value ? 'selected' : ''}>${compact ? c.v : c.label}</option>`).join('')}
+  </select>`;
+}
+
+function conditionLabel(cond) {
+  if (!cond || (!cond.media && !cond.sleeve)) return '';
+  return [cond.media ? `disque ${cond.media}` : '', cond.sleeve ? `pochette ${cond.sleeve}` : ''].filter(Boolean).join(', ');
+}
+
+function setAlbumCondition(idSid, field, value) {
+  const realId = unsid(idSid);
+  const a = albums.find(x => x.id === realId || x.id === String(realId));
+  if (!a) return;
+  a.condition = { ...(a.condition || {}), [field]: value || undefined };
+  if (!a.condition.media && !a.condition.sleeve) delete a.condition;
+  saveToStorage();
 }
 
 // ===================== PWA — ENREGISTREMENT DU SERVICE WORKER =====================
